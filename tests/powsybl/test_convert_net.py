@@ -8,17 +8,11 @@ Note: Element count conservation tests are in test_convert.py::TestToPowsyblElem
 import pytest
 import numpy as np
 
-try:
-    import pypowsybl as pp
-
-    PYPOWSYBL_AVAILABLE = True
-except ImportError:
-    PYPOWSYBL_AVAILABLE = False
-
+from gridfm_datakit.powsybl.api import is_powsybl_available
 from gridfm_datakit.network import load_net_from_pglib
 
 pytestmark = pytest.mark.skipif(
-    not PYPOWSYBL_AVAILABLE,
+    is_powsybl_available() is False,
     reason="pypowsybl is not installed. Install with: pip install gridfm-datakit[powsybl]",
 )
 
@@ -56,15 +50,15 @@ class TestConvertNet:
         from gridfm_datakit.powsybl import convert_net
 
         loaded = convert_net(gridfm_case14)
-        assert loaded.pb_net is not None
-        assert hasattr(loaded.pb_net, "get_buses")
+        assert loaded.pp_net is not None
+        assert hasattr(loaded.pp_net, "get_buses")
 
     def test_has_gfm(self, gridfm_case14):
         """Test that the result has the original gfm network."""
         from gridfm_datakit.powsybl import convert_net
 
         loaded = convert_net(gridfm_case14)
-        assert loaded.gfm is gridfm_case14
+        assert loaded.gfm_net is gridfm_case14
 
     def test_has_metadata(self, gridfm_case14):
         """Test that the result has metadata with gen_costs."""
@@ -79,7 +73,7 @@ class TestConvertNet:
         from gridfm_datakit.powsybl import convert_net
 
         loaded = convert_net(gridfm_case14, network_id="custom_id")
-        assert loaded.pb_net.id == "custom_id"
+        assert loaded.pp_net.id == "custom_id"
 
     def test_preserves_original_network(self, gridfm_case14):
         """Test that convert_net preserves the original network unchanged."""
@@ -91,9 +85,9 @@ class TestConvertNet:
 
         loaded = convert_net(gridfm_case14)
 
-        assert np.array_equal(loaded.gfm.buses, original_buses)
-        assert np.array_equal(loaded.gfm.gens, original_gens)
-        assert np.array_equal(loaded.gfm.branches, original_branches)
+        assert np.array_equal(loaded.gfm_net.buses, original_buses)
+        assert np.array_equal(loaded.gfm_net.gens, original_gens)
+        assert np.array_equal(loaded.gfm_net.branches, original_branches)
 
     def test_case24(self, gridfm_case24):
         """Test convert_net with case24 network."""
@@ -101,7 +95,7 @@ class TestConvertNet:
 
         loaded = convert_net(gridfm_case24)
         assert isinstance(loaded, LoadedNetwork)
-        assert loaded.gfm.buses.shape[0] == 24
+        assert loaded.gfm_net.buses.shape[0] == 24
 
     def test_case57(self, gridfm_case57):
         """Test convert_net with case57 network."""
@@ -109,7 +103,7 @@ class TestConvertNet:
 
         loaded = convert_net(gridfm_case57)
         assert isinstance(loaded, LoadedNetwork)
-        assert loaded.gfm.buses.shape[0] == 57
+        assert loaded.gfm_net.buses.shape[0] == 57
 
 
 class TestConvertNetGenCosts:
@@ -128,7 +122,7 @@ class TestConvertNetGenCosts:
 
         loaded = convert_net(gridfm_case14)
 
-        n_generators = loaded.gfm.gens.shape[0]
+        n_generators = loaded.gfm_net.gens.shape[0]
         n_gen_costs = len(loaded.metadata.gen_costs)
 
         assert n_gen_costs == n_generators
@@ -149,7 +143,7 @@ class TestConvertNetGenCosts:
         from gridfm_datakit.powsybl import convert_net
 
         loaded = convert_net(gridfm_case14)
-        n_generators = loaded.gfm.gens.shape[0]
+        n_generators = loaded.gfm_net.gens.shape[0]
 
         for gen_idx in loaded.metadata.gen_costs.keys():
             idx = int(gen_idx)
@@ -160,7 +154,7 @@ class TestConvertNetGenCosts:
         from gridfm_datakit.powsybl import convert_net
 
         loaded = convert_net(gridfm_case14)
-        gencost_matrix = loaded.gfm.gencosts
+        gencost_matrix = loaded.gfm_net.gencosts
 
         NCOST_IDX = 3
         COST_IDX = 4

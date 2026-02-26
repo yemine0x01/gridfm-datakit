@@ -143,13 +143,13 @@ class LoadedNetwork:
     Container for a loaded network with all associated data.
 
     Attributes:
-        pb_net: The PowSybl network object.
-        gfm: The gridfm_datakit Network object.
+        pp_net: The PowSybl network object.
+        gfm_net: The gridfm_datakit Network object.
         metadata: Metadata extracted from the network file (e.g., gen_costs).
     """
 
-    pb_net: Any  # pypowsybl.network.Network
-    gfm: Network
+    pp_net: Any  # pypowsybl.network.Network
+    gfm_net: Network
     metadata: NetworkMetadata
 
 
@@ -288,33 +288,33 @@ def load_net(network_path: str) -> LoadedNetwork:
     if path.suffix.lower() == ".m":
         # pypowsybl cannot load .m text files directly, but can load .mat binary files
         # Load the .m file using gridfm_datakit and convert to temp .mat file
-        gfm = load_net_from_file(str(path))
+        gfm_net = load_net_from_file(str(path))
 
         # Create a temporary .mat file
         with tempfile.NamedTemporaryFile(suffix=".mat", delete=False) as tmp:
             mat_path = Path(tmp.name)
 
         try:
-            to_mat_file(gfm, mat_path)
-            pb_net = pypowsybl.network.load(str(mat_path))
+            to_mat_file(gfm_net, mat_path)
+            pp_net = pypowsybl.network.load(str(mat_path))
         finally:
             # Clean up temp file
             mat_path.unlink(missing_ok=True)
 
         # Extract gen_costs from the loaded network
-        gen_costs = _extract_gen_costs_from_network(gfm)
+        gen_costs = _extract_gen_costs_from_network(gfm_net)
         metadata = NetworkMetadata(gen_costs=gen_costs)
     else:
         # For other formats (XIIDM, CGMES, etc.), load directly with pypowsybl
-        pb_net = pypowsybl.network.load(network_path)
+        pp_net = pypowsybl.network.load(network_path)
 
         # Create conversion options with gen_costs from metadata
         options = ConversionOptions(gen_costs=metadata.gen_costs)
 
         # Convert to gridfm_datakit Network
-        gfm = from_powsybl(pb_net, options=options)
+        gfm_net = from_powsybl(pp_net, options=options)
 
-    return LoadedNetwork(pb_net=pb_net, gfm=gfm, metadata=metadata)
+    return LoadedNetwork(pp_net=pp_net, gfm_net=gfm_net, metadata=metadata)
 
 
 def _extract_gen_costs_from_network(network: Network) -> Dict[str, Tuple[float, ...]]:
@@ -379,8 +379,8 @@ def convert_net(network: Network, network_id: str = "network") -> LoadedNetwork:
     -------
     LoadedNetwork
         A LoadedNetwork object containing:
-        - pb_net: The converted PowSybl network object
-        - gfm: The original gridfm_datakit Network object
+        - pp_net: The converted PowSybl network object
+        - gfm_net: The original gridfm_datakit Network object
         - metadata: Metadata extracted from the network (including gen_costs)
 
     Example
@@ -395,10 +395,10 @@ def convert_net(network: Network, network_id: str = "network") -> LoadedNetwork:
     >>> loaded = convert_net(gfm_net)
     >>>
     >>> # Access the pypowsybl network
-    >>> print(loaded.pb_net.get_buses())
+    >>> print(loaded.pp_net.get_buses())
     >>>
     >>> # Access the original gfm network
-    >>> print(loaded.gfm.buses.shape)
+    >>> print(loaded.gfm_net.buses.shape)
     >>>
     >>> # Access the gen_costs
     >>> print(loaded.metadata.gen_costs)
@@ -414,7 +414,7 @@ def convert_net(network: Network, network_id: str = "network") -> LoadedNetwork:
     # Convert to pypowsybl network
     pb_net = to_powsybl(network, network_id=network_id)
 
-    return LoadedNetwork(pb_net=pb_net, gfm=network, metadata=metadata)
+    return LoadedNetwork(pp_net=pb_net, gfm_net=network, metadata=metadata)
 
 
 __all__ = [

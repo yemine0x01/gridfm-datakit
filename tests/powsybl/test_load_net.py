@@ -7,17 +7,11 @@ Tests: load_net, load_metadata, to_mat_file, convert_m_to_mat
 import pytest
 from pathlib import Path
 
-try:
-    import pypowsybl as pp
-
-    PYPOWSYBL_AVAILABLE = True
-except ImportError:
-    PYPOWSYBL_AVAILABLE = False
-
+from gridfm_datakit.powsybl.api import is_powsybl_available
 from gridfm_datakit.network import Network
 
 pytestmark = pytest.mark.skipif(
-    not PYPOWSYBL_AVAILABLE,
+    is_powsybl_available() is False,
     reason="pypowsybl is not installed. Install with: pip install gridfm-datakit[powsybl]",
 )
 
@@ -25,9 +19,10 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def xiidm_case14_path(tmp_path):
     """Create a pypowsybl IEEE14 network and save to XIIDM format."""
-    pb_net = pp.network.create_ieee14()
+    from gridfm_datakit.powsybl import pypowsybl as pp
+    pp_net = pp.network.create_ieee14()
     xiidm_file = tmp_path / "ieee14.xiidm"
-    pb_net.save(str(xiidm_file))
+    pp_net.save(str(xiidm_file))
     return str(xiidm_file)
 
 
@@ -48,9 +43,9 @@ class TestLoadNet:
         loaded = load_net(xiidm_case14_path)
 
         assert isinstance(loaded, LoadedNetwork)
-        assert loaded.pb_net is not None
-        assert hasattr(loaded.pb_net, "get_buses")
-        assert isinstance(loaded.gfm, Network)
+        assert loaded.pp_net is not None
+        assert hasattr(loaded.pp_net, "get_buses")
+        assert isinstance(loaded.gfm_net, Network)
         assert isinstance(loaded.metadata, NetworkMetadata)
 
     def test_bus_count_matches(self, xiidm_case14_path):
@@ -59,7 +54,7 @@ class TestLoadNet:
 
         loaded = load_net(xiidm_case14_path)
 
-        assert len(loaded.pb_net.get_buses()) == loaded.gfm.buses.shape[0] == 14
+        assert len(loaded.pp_net.get_buses()) == loaded.gfm_net.buses.shape[0] == 14
 
     def test_gen_and_branch_counts(self, xiidm_case14_path):
         """Test that generators and branches are loaded correctly."""
@@ -67,8 +62,8 @@ class TestLoadNet:
 
         loaded = load_net(xiidm_case14_path)
 
-        assert loaded.gfm.gens.shape[0] == 5
-        assert loaded.gfm.branches.shape[0] == 20
+        assert loaded.gfm_net.gens.shape[0] == 5
+        assert loaded.gfm_net.branches.shape[0] == 20
 
     def test_gen_costs_empty_for_xiidm(self, xiidm_case14_path):
         """Test that gen_costs are empty for XIIDM files (no gencost data)."""
@@ -95,8 +90,8 @@ class TestLoadNetMatpower:
         loaded = load_net(matpower_case14_path)
 
         assert isinstance(loaded, LoadedNetwork)
-        assert loaded.pb_net is not None
-        assert isinstance(loaded.gfm, Network)
+        assert loaded.pp_net is not None
+        assert isinstance(loaded.gfm_net, Network)
 
     def test_extracts_gen_costs(self, matpower_case14_path):
         """Test that load_net with .m file extracts gen_costs."""
@@ -111,9 +106,9 @@ class TestLoadNetMatpower:
 
         loaded = load_net(matpower_case14_path)
 
-        assert loaded.gfm.buses.shape[0] == 14
-        assert len(loaded.pb_net.get_buses()) == 14
-        assert loaded.gfm.gens.shape[0] == 5
+        assert loaded.gfm_net.buses.shape[0] == 14
+        assert len(loaded.pp_net.get_buses()) == 14
+        assert loaded.gfm_net.gens.shape[0] == 5
 
 
 class TestLoadMetadata:
@@ -159,6 +154,7 @@ class TestToMatFile:
         """Test that to_mat_file creates a .mat file loadable by pypowsybl."""
         from gridfm_datakit.powsybl import to_mat_file
         from gridfm_datakit.network import load_net_from_pglib
+        from gridfm_datakit.powsybl import pypowsybl as pp
 
         net = load_net_from_pglib("case14_ieee")
         mat_path = tmp_path / "test.mat"
@@ -175,14 +171,15 @@ class TestToMatFile:
         """Test that element counts are preserved in conversion."""
         from gridfm_datakit.powsybl import to_mat_file
         from gridfm_datakit.network import load_net_from_pglib
+        from gridfm_datakit.powsybl import pypowsybl as pp
 
         net = load_net_from_pglib("case14_ieee")
         mat_path = tmp_path / "test.mat"
         to_mat_file(net, mat_path)
 
-        pb_net = pp.network.load(str(mat_path))
-        assert len(pb_net.get_buses()) == net.buses.shape[0]
-        assert len(pb_net.get_generators()) == net.gens.shape[0]
+        pp_net = pp.network.load(str(mat_path))
+        assert len(pp_net.get_buses()) == net.buses.shape[0]
+        assert len(pp_net.get_generators()) == net.gens.shape[0]
 
 
 class TestConvertMToMat:
@@ -191,15 +188,16 @@ class TestConvertMToMat:
     def test_creates_loadable_mat_file(self, matpower_case14_path, tmp_path):
         """Test that convert_m_to_mat creates a .mat file loadable by pypowsybl."""
         from gridfm_datakit.powsybl import convert_m_to_mat
+        from gridfm_datakit.powsybl import pypowsybl as pp
 
         mat_path = tmp_path / "converted.mat"
         result = convert_m_to_mat(matpower_case14_path, mat_path)
 
         assert result.exists()
 
-        pb_net = pp.network.load(str(mat_path))
-        assert pb_net is not None
-        assert len(pb_net.get_buses()) == 14
+        pp_net = pp.network.load(str(mat_path))
+        assert pp_net is not None
+        assert len(pp_net.get_buses()) == 14
 
     def test_file_not_found(self, tmp_path):
         """Test that convert_m_to_mat raises FileNotFoundError for missing file."""
