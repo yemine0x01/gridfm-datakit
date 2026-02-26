@@ -12,9 +12,9 @@ from_powsybl(pp_net) → Network:
     4. Return gridfm_datakit Network
 
 to_powsybl(network) → pypowsybl.network.Network:
-    1. Create empty pypowsybl network
-    2. Build hierarchy: Substations → Voltage Levels → Buses
-    3. Create equipment: generators, loads, shunts, lines
+    1. Save Network to temp .m file
+    2. Convert .m to .mat via scipy
+    3. Load .mat with pypowsybl
     4. Return pypowsybl Network
 
 Example:
