@@ -25,6 +25,7 @@ from gridfm_datakit.perturbations.load_perturbation import (
     load_scenarios_to_df,
     plot_load_scenarios_combined,
 )
+import gridfm_datakit.powsybl as powsybl
 import gc
 from datetime import datetime
 from tqdm import tqdm
@@ -159,6 +160,9 @@ def _prepare_network_and_scenarios(
         net = load_net_from_file(
             os.path.join(args.network.network_dir, args.network.name) + ".m",
         )
+    elif args.network.source == "powsybl":
+        loaded_net = powsybl.load_net(args.network.file)
+        net = loaded_net.gfm_net
     else:
         raise ValueError("Invalid grid source!")
 
