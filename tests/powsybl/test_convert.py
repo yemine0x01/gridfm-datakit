@@ -7,14 +7,8 @@ Tests bidirectional conversion between pypowsybl Network and gridfm_datakit Netw
 import pytest
 import numpy as np
 
-try:
-    import pypowsybl as pp
-    import pypowsybl.network as pn
 
-    PYPOWSYBL_AVAILABLE = True
-except ImportError:
-    PYPOWSYBL_AVAILABLE = False
-
+from gridfm_datakit.powsybl.api import is_powsybl_available
 from gridfm_datakit.network import load_net_from_pglib, Network
 from gridfm_datakit.utils.idx_bus import (
     BUS_I,
@@ -33,7 +27,7 @@ from gridfm_datakit.utils.idx_gen import (
 )
 
 pytestmark = pytest.mark.skipif(
-    not PYPOWSYBL_AVAILABLE,
+    not is_powsybl_available(),
     reason="pypowsybl is not installed. Install with: pip install gridfm-datakit[powsybl]",
 )
 
@@ -41,12 +35,14 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def pb_ieee14():
     """Create a pypowsybl IEEE 14 bus network."""
+    import pypowsybl as pp
     return pp.network.create_ieee14()
 
 
 @pytest.fixture
 def pb_ieee9():
     """Create a pypowsybl IEEE 9 bus network."""
+    import pypowsybl as pp
     return pp.network.create_ieee9()
 
 
@@ -211,8 +207,9 @@ class TestFromPowsybl:
     def test_from_powsybl_empty_network_raises(self):
         """Test that converting an empty network raises ValueError."""
         from gridfm_datakit.powsybl.convert import from_powsybl
+        import pypowsybl as pp
 
-        empty_net = pn.create_empty("empty")
+        empty_net = pp.network.create_empty("empty")
 
         with pytest.raises(ValueError, match="no buses"):
             from_powsybl(empty_net)
@@ -224,9 +221,10 @@ class TestToPowsybl:
     def test_to_powsybl_returns_network(self, gridfm_case14):
         """Test that to_powsybl returns a pypowsybl Network object."""
         from gridfm_datakit.powsybl.convert import to_powsybl
+        import pypowsybl as pp
 
         pb_net = to_powsybl(gridfm_case14)
-        assert isinstance(pb_net, pn.Network), (
+        assert isinstance(pb_net, pp.network.Network), (
             "Should return a pypowsybl Network object"
         )
 
@@ -310,10 +308,11 @@ class TestToPowsybl:
     def test_to_powsybl_case24(self, gridfm_case24):
         """Test conversion with case24_ieee_rts network."""
         from gridfm_datakit.powsybl.convert import to_powsybl
+        import pypowsybl as pp
 
         pb_net = to_powsybl(gridfm_case24)
 
-        assert isinstance(pb_net, pn.Network)
+        assert isinstance(pb_net, pp.network.Network)
         assert len(pb_net.get_buses()) == gridfm_case24.buses.shape[0]
         assert len(pb_net.get_generators()) == gridfm_case24.gens.shape[0]
 
@@ -429,9 +428,9 @@ class TestEdgeCases:
         """
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case24)
-        lines_df = pb_net.get_lines()
-        trafos_df = pb_net.get_2_windings_transformers()
+        pp_net = to_powsybl(gridfm_case24)
+        lines_df = pp_net.get_lines()
+        trafos_df = pp_net.get_2_windings_transformers()
 
         # pypowsybl's loader creates lines and possibly transformers
         total_branches = len(lines_df) + len(trafos_df)
@@ -478,48 +477,48 @@ class TestToPowsyblElementConservation:
         """Test that the number of buses is conserved."""
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case14)
-        pb_buses = len(pb_net.get_buses())
+        pp_net = to_powsybl(gridfm_case14)
+        pp_buses = len(pp_net.get_buses())
 
-        assert pb_buses == gridfm_case14.buses.shape[0], (
-            f"Bus count should be conserved: {pb_buses} != {gridfm_case14.buses.shape[0]}"
+        assert pp_buses == gridfm_case14.buses.shape[0], (
+            f"Bus count should be conserved: {pp_buses} != {gridfm_case14.buses.shape[0]}"
         )
 
     def test_generator_count_conserved(self, gridfm_case14):
         """Test that the number of generators is conserved."""
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case14)
-        pb_gens = len(pb_net.get_generators())
+        pp_net = to_powsybl(gridfm_case14)
+        pp_gens = len(pp_net.get_generators())
 
-        assert pb_gens == gridfm_case14.gens.shape[0], (
-            f"Generator count should be conserved: {pb_gens} != {gridfm_case14.gens.shape[0]}"
+        assert pp_gens == gridfm_case14.gens.shape[0], (
+            f"Generator count should be conserved: {pp_gens} != {gridfm_case14.gens.shape[0]}"
         )
 
     def test_load_count_conserved(self, gridfm_case14):
         """Test that loads are created for buses with non-zero demand."""
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case14)
-        pb_loads = len(pb_net.get_loads())
+        pp_net = to_powsybl(gridfm_case14)
+        pp_loads = len(pp_net.get_loads())
 
         # Count buses with non-zero load
         buses_with_load = np.sum(
             (gridfm_case14.buses[:, PD] != 0) | (gridfm_case14.buses[:, QD] != 0)
         )
 
-        assert pb_loads == buses_with_load, (
-            f"Load count should match buses with load: {pb_loads} != {buses_with_load}"
+        assert pp_loads == buses_with_load, (
+            f"Load count should match buses with load: {pp_loads} != {buses_with_load}"
         )
 
     def test_branch_count_conserved(self, gridfm_case14):
         """Test that total branches (lines + transformers) are conserved."""
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case14)
-        pb_lines = len(pb_net.get_lines())
-        pb_trafos = len(pb_net.get_2_windings_transformers())
-        total_branches = pb_lines + pb_trafos
+        pp_net = to_powsybl(gridfm_case14)
+        pp_lines = len(pp_net.get_lines())
+        pp_trafos = len(pp_net.get_2_windings_transformers())
+        total_branches = pp_lines + pp_trafos
 
         assert total_branches == gridfm_case14.branches.shape[0], (
             f"Branch count should be conserved: {total_branches} != {gridfm_case14.branches.shape[0]}"
@@ -529,42 +528,42 @@ class TestToPowsyblElementConservation:
         """Test that shunt compensators are created for buses with non-zero shunt."""
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case14)
-        pb_shunts = len(pb_net.get_shunt_compensators())
+        pp_net = to_powsybl(gridfm_case14)
+        pp_shunts = len(pp_net.get_shunt_compensators())
 
         # Count buses with non-zero shunt admittance
         buses_with_shunt = np.sum(
             (gridfm_case14.buses[:, GS] != 0) | (gridfm_case14.buses[:, BS] != 0)
         )
 
-        assert pb_shunts == buses_with_shunt, (
-            f"Shunt count should match buses with shunt: {pb_shunts} != {buses_with_shunt}"
+        assert pp_shunts == buses_with_shunt, (
+            f"Shunt count should match buses with shunt: {pp_shunts} != {buses_with_shunt}"
         )
 
     def test_conservation_case24(self, gridfm_case24):
         """Test element conservation for case24 network."""
         from gridfm_datakit.powsybl.convert import to_powsybl
 
-        pb_net = to_powsybl(gridfm_case24)
+        pp_net = to_powsybl(gridfm_case24)
 
         # Buses
-        assert len(pb_net.get_buses()) == gridfm_case24.buses.shape[0]
+        assert len(pp_net.get_buses()) == gridfm_case24.buses.shape[0]
 
         # Generators
-        assert len(pb_net.get_generators()) == gridfm_case24.gens.shape[0]
+        assert len(pp_net.get_generators()) == gridfm_case24.gens.shape[0]
 
         # Branches (lines + transformers)
-        total_branches = len(pb_net.get_lines()) + len(pb_net.get_2_windings_transformers())
+        total_branches = len(pp_net.get_lines()) + len(pp_net.get_2_windings_transformers())
         assert total_branches == gridfm_case24.branches.shape[0]
 
         # Loads
         buses_with_load = np.sum(
             (gridfm_case24.buses[:, PD] != 0) | (gridfm_case24.buses[:, QD] != 0)
         )
-        assert len(pb_net.get_loads()) == buses_with_load
+        assert len(pp_net.get_loads()) == buses_with_load
 
         # Shunts
         buses_with_shunt = np.sum(
             (gridfm_case24.buses[:, GS] != 0) | (gridfm_case24.buses[:, BS] != 0)
         )
-        assert len(pb_net.get_shunt_compensators()) == buses_with_shunt
+        assert len(pp_net.get_shunt_compensators()) == buses_with_shunt
