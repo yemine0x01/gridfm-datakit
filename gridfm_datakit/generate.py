@@ -25,6 +25,7 @@ from gridfm_datakit.perturbations.load_perturbation import (
     load_scenarios_to_df,
     plot_load_scenarios_combined,
 )
+import gridfm_datakit.powsybl as powsybl
 import gc
 from datetime import datetime
 from tqdm import tqdm
@@ -37,7 +38,6 @@ import sys
 from gridfm_datakit.network import Network
 from gridfm_datakit.process.process_network import init_julia
 from gridfm_datakit.utils.random_seed import custom_seed
-
 
 def _setup_environment(
     config: Union[str, Dict[str, Any], NestedNamespace],
@@ -82,6 +82,22 @@ def _setup_environment(
         # chunk_seed = seed * 20000 + start_idx + 1 < 2^31 - 1
         # seed < (2,147,483,647 - n_scenarios) / 20,000 ~= 100_000 so taking 50_000 to be safe
         print(f"No seed provided. Using seed={seed}")
+
+    # Resolve and validate the PF solver setting.
+    #
+    # pf_solver controls which engine is used to solve the power flow equations
+    # in PF mode.  It is completely independent of network.source: you can load
+    # a network from any source and solve it with either engine.
+    #
+    # OPF is always solved by PowerModels (Julia) regardless of this setting.
+    # In OPF mode the value is read and stored on args but is never consulted
+    # during execution — it is kept here purely for consistency and logging.
+    pf_solver = getattr(args.settings, "pf_solver", "powermodel")
+    if pf_solver not in ("powermodel", "powsybl"):
+        raise ValueError(
+            f"settings.pf_solver must be 'powermodel' or 'powsybl', got {pf_solver!r}"
+        )
+    args.settings.pf_solver = pf_solver
 
     # Setup output directory
     base_path = os.path.join(args.settings.data_dir, args.network.name, "raw")
@@ -142,7 +158,7 @@ def _prepare_network_and_scenarios(
     args: NestedNamespace,
     file_paths: Dict[str, str],
     seed: int,
-) -> Tuple[Network, np.ndarray]:
+) -> Tuple[Network, np.ndarray, Dict[str, Any]]:
     """Prepare the network and generate load scenarios.
 
     Args:
@@ -153,12 +169,18 @@ def _prepare_network_and_scenarios(
     Returns:
         Tuple of (network, scenarios)
     """
+    meta = {}
     if args.network.source == "pglib":
         net = load_net_from_pglib(args.network.name)
     elif args.network.source == "file":
         net = load_net_from_file(
             os.path.join(args.network.network_dir, args.network.name) + ".m",
         )
+    elif args.network.source == "powsybl":
+        loaded_net = powsybl.load_net(args.network.file)
+        meta["pp_net"] = loaded_net.pp_net
+        meta["mapping_p2g"] = loaded_net.mapping_p2g
+        net = loaded_net.gfm_net
     else:
         raise ValueError("Invalid grid source!")
 
@@ -178,7 +200,7 @@ def _prepare_network_and_scenarios(
     else:
         print("Skipping plot of scenarios for large networks (number of buses > 100)")
 
-    return net, scenarios
+    return net, scenarios, meta
 
 
 def _save_generated_data(
@@ -256,7 +278,7 @@ def generate_power_flow_data(
     args, base_path, file_paths, seed = _setup_environment(config)
 
     # Prepare network and scenarios
-    net, scenarios = _prepare_network_and_scenarios(args, file_paths, seed)
+    net, scenarios, meta = _prepare_network_and_scenarios(args, file_paths, seed)
 
     # Initialize topology generator
     topology_generator = initialize_topology_generator(args.topology_perturbation, net)
@@ -316,6 +338,8 @@ def generate_power_flow_data(
                             args.settings.pf_fast,
                             args.settings.dcpf_fast,
                             jl,
+                            args.settings.pf_solver,
+                            meta=meta,
                         )
                     else:
                         raise ValueError("Invalid mode!")
@@ -371,7 +395,7 @@ def generate_power_flow_data_distributed(
         raise ValueError("Invalid mode!")
 
     # Prepare network and scenarios
-    net, scenarios = _prepare_network_and_scenarios(args, file_paths, seed)
+    net, scenarios, meta = _prepare_network_and_scenarios(args, file_paths, seed)
 
     # Initialize topology generator
     topology_generator = initialize_topology_generator(args.topology_perturbation, net)
@@ -431,6 +455,8 @@ def generate_power_flow_data_distributed(
                         file_paths["solver_log_dir"],
                         args.settings.max_iter,
                         seed,
+                        args.settings.pf_solver,
+                        meta,
                     )
                     for chunk in scenario_chunks
                 ]
