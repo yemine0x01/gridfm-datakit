@@ -11,9 +11,12 @@ import copy
 
 import pytest
 
-from tests.dynamic.conftest import requires_powsybl
+import gridfm_datakit.powsybl as powsybl
 
-pytestmark = requires_powsybl
+pytestmark = pytest.mark.skipif(
+    not powsybl.is_powsybl_available(),
+    reason="pypowsybl is not installed. Install with: pip install gridfm-datakit[powsybl]",
+)
 
 
 @pytest.fixture(scope="module")

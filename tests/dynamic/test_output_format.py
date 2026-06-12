@@ -13,10 +13,15 @@ import multiprocessing
 
 import numpy as np
 import pandas as pd
-import zarr
+import pytest
 
 from gridfm_datakit.dynamic import DynamicResults
 from gridfm_datakit.utils.column_names import BRANCH_COLUMNS, BUS_COLUMNS, GEN_COLUMNS
+
+zarr = pytest.importorskip(
+    "zarr",
+    reason="zarr is not installed. Install with: pip install gridfm-datakit[dynamic]",
+)
 
 
 # ---------------------------------------------------------------------------
