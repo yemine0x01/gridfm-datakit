@@ -84,3 +84,8 @@ test = [
 powsybl = [
   "pypowsybl"
 ]
+
+dynamic = [
+  "pypowsybl",
+  "zarr>=2.0",
+]
