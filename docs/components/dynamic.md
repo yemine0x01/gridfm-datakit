@@ -38,6 +38,20 @@ configuration and output reference.
 
 ::: gridfm_datakit.dynamic.process_dynamic.process_single_dynamic_simulation
 
+## Event placement
+
+### `EventGraph`
+
+::: gridfm_datakit.dynamic.placement.EventGraph
+
+### `place_scenario`
+
+::: gridfm_datakit.dynamic.placement.place_scenario
+
+### `PlacementError`
+
+::: gridfm_datakit.dynamic.placement.PlacementError
+
 ## Dynawo backend
 
 ### `DynawoMappings`
