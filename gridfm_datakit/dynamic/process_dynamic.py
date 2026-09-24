@@ -14,12 +14,14 @@ all scenarios in that chunk.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 import multiprocessing
 import traceback
 from typing import Any, Dict, Iterator, List, Tuple, Union
 
 import numpy as np
+import pandas as pd
 
 from gridfm_datakit.network import Network
 from gridfm_datakit.dynamic.dynawo.simulate import (
@@ -30,6 +32,7 @@ from gridfm_datakit.dynamic import DynamicResults
 from gridfm_datakit.dynamic.dynawo import (
     get_dynawo_loadflow_parameters,
     get_dynawo_simulation_parameters,
+    generate_dynawo_event_mapping,
     generate_dynawo_mappings,
 )
 from gridfm_datakit.process.process_network import init_julia
@@ -300,6 +303,7 @@ def _process_dynamic_chunk(args: Tuple) -> Union[List[Dict[str, Any]], List[Exce
                             scenario_index=scenario_index,
                             p2g_maps=net.mapping_p2g,
                             dynamic_mappings=dynamic_mappings,
+                            events=dynamic_inputs.events,
                             dynamic_solver_params=dynamic_solver_params,
                             dynamic_solver=dynamic_solver,
                             julia=julia,
@@ -341,6 +345,7 @@ def process_single_dynamic_simulation(
     scenario_index: int,
     p2g_maps,
     dynamic_mappings: Any,
+    events: pd.DataFrame,
     dynamic_solver_params: Any,
     dynamic_solver: str,
     julia: Any,
@@ -361,6 +366,9 @@ def process_single_dynamic_simulation(
 
     Absent generators default to identity, so a scenario yields exactly one
     sample, the pre-perturbation behaviour.
+
+    Each simulation builds its event mapping from ``events``, which replaces the
+    event mapping in ``dynamic_mappings``.
 
     Returns a list of result dicts (possibly empty if every perturbation failed).
     """
@@ -424,6 +432,7 @@ def process_single_dynamic_simulation(
             dyn_results = _run_dynamic_simulation(
                 pp_net,
                 dynamic_mappings,
+                events,
                 dynamic_solver_params,
                 dynamic_solver,
             )
@@ -493,15 +502,24 @@ def _compute_balanced_static_state(
 def _run_dynamic_simulation(
     network,
     dynamic_mappings,
+    events,
     solver_parameters,
     dynamic_solver,
 ) -> DynamicResults:
     """Wrapper around solver-specific dynamic simulation run.
 
-    Currently routes to ``run_dynawo_simulation``.
+    Currently routes to ``run_dynawo_simulation``, with the event mapping of
+    ``dynamic_mappings`` replaced by one built from ``events``.
     """
     if dynamic_solver == "dynawo":
-        return run_dynawo_simulation(network, dynamic_mappings, solver_parameters)
+        return run_dynawo_simulation(
+            network,
+            dataclasses.replace(
+                dynamic_mappings,
+                event_mapping=generate_dynawo_event_mapping(events),
+            ),
+            solver_parameters,
+        )
     raise NotImplementedError(
         f"Dynamic solver {dynamic_solver!r} is not implemented. "
         "Supported solvers: 'dynawo'.",

@@ -48,6 +48,10 @@ configuration and output reference.
 
 ::: gridfm_datakit.dynamic.dynawo.generate_dynawo_mappings
 
+### `generate_dynawo_event_mapping`
+
+::: gridfm_datakit.dynamic.dynawo.generate_dynawo_event_mapping
+
 ### `get_dynawo_simulation_parameters`
 
 ::: gridfm_datakit.dynamic.dynawo.get_dynawo_simulation_parameters

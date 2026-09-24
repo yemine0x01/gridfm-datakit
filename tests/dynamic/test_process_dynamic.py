@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import types
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,7 @@ def test_process_single_dynamic_simulation(config_ieee14):
         scenario_index=0,
         p2g_maps=net.mapping_p2g,
         dynamic_mappings=dynawo_mappings,
+        events=dynamic_inputs.events,
         dynamic_solver_params=simulation_parameters,
         dynamic_solver="dynawo",
         julia=julia,
@@ -148,25 +150,36 @@ class _ListTopologyGenerator:
 def _stub_solver_steps(monkeypatch, fail_on=()):
     """Stub the OPF/PF and Dynawo steps; fail_on lists the ones that diverge."""
     seen = []
+    seen_events = []
 
     def _static_state(**kwargs):
         return None, {"bus": np.zeros((2, 3))}
 
-    def _dynamic(network, mappings, params, solver):
+    def _dynamic(network, mappings, events, params, solver):
         index = len(seen)
         seen.append(index)
+        seen_events.append(events)
         if index in fail_on:
             raise RuntimeError(f"dynamic simulation {index} diverged")
         return f"curves-{index}"
 
     monkeypatch.setattr(pdyn, "_compute_balanced_static_state", _static_state)
     monkeypatch.setattr(pdyn, "_run_dynamic_simulation", _dynamic)
-    return seen
+    return seen, seen_events
+
+
+_EVENTS = object()
 
 
 class TestProcessSingleDynamicSimulation:
     @staticmethod
-    def _run(pp_net, topology_generator, error_log_file=None, scenario_index=0):
+    def _run(
+        pp_net,
+        topology_generator,
+        error_log_file=None,
+        scenario_index=0,
+        events=_EVENTS,
+    ):
         scenarios = np.zeros((3, scenario_index + 1, 2))
         return pdyn.process_single_dynamic_simulation(
             pp_net=pp_net,
@@ -175,6 +188,7 @@ class TestProcessSingleDynamicSimulation:
             scenario_index=scenario_index,
             p2g_maps={},
             dynamic_mappings=None,
+            events=events,
             dynamic_solver_params=None,
             dynamic_solver="dynawo",
             julia=None,
@@ -242,6 +256,15 @@ class TestProcessSingleDynamicSimulation:
         results = self._run(_FakePpNet(), None)
         assert len(results) == 1 and results[0]["perturbation_index"] == 0
 
+    def test_every_simulation_receives_the_events(self, monkeypatch):
+        _, seen_events = _stub_solver_steps(monkeypatch)
+        events = object()
+
+        self._run(_FakePpNet(), _ListTopologyGenerator(3), events=events)
+
+        assert len(seen_events) == 3
+        assert all(seen is events for seen in seen_events)
+
 
 def _chunk_args(
     start_idx=0,
@@ -256,7 +279,7 @@ def _chunk_args(
         end_idx,
         np.zeros((3, max(end_idx, 1), 2)),  # scenarios
         "network.iidm",  # network_path
-        None,  # dynamic_inputs
+        types.SimpleNamespace(events="events"),  # dynamic_inputs
         dynamic_solver,
         error_log_file,
         200,  # max_iter
@@ -316,6 +339,18 @@ class TestProcessDynamicChunk:
             (1, 0),
             (1, 1),
         ]
+
+    def test_the_file_events_reach_every_simulation(self, monkeypatch):
+        _stub_worker_setup(monkeypatch)
+        monkeypatch.setattr(
+            pdyn,
+            "process_single_dynamic_simulation",
+            lambda **kwargs: [{"events": kwargs["events"]}],
+        )
+
+        results = pdyn._process_dynamic_chunk(_chunk_args(start_idx=0, end_idx=2))
+
+        assert [r["events"] for r in results] == ["events", "events"]
 
     def test_a_failing_scenario_is_logged_and_the_chunk_continues(
         self,
