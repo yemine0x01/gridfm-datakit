@@ -29,6 +29,8 @@ from gridfm_datakit.dynamic.dynawo.simulate import (
     compute_balanced_static_state_dynawo,
 )
 from gridfm_datakit.dynamic import DynamicResults
+from gridfm_datakit.dynamic.event_perturbation import EventPerturbation, draw_events
+from gridfm_datakit.dynamic.placement import EventGraph
 from gridfm_datakit.dynamic.dynawo import (
     get_dynawo_loadflow_parameters,
     get_dynawo_simulation_parameters,
@@ -123,12 +125,12 @@ def iter_dynamic_simulations(
     # perturbs branch admittances, both pre-OPF. They therefore vary the initial
     # operating point Dynawo starts from (which machines are dispatched and at what
     # loading), and so do influence the trajectory. What they do NOT vary is the
-    # dynamic model set or the event sequence: those come from the CSV inputs and are
-    # identical across every sample. admittance_perturbation's r/x do reach the
-    # simulated network (update_powsybl writes them), but only topology_perturbation
-    # changes which elements are in service, so it alone changes the set of models
-    # Dynawo instantiates and alone expands a scenario into several samples. Wired
-    # for parity with the static pipeline; effect on dynamic outputs untested.
+    # dynamic model set, which comes from the CSV inputs and is identical across
+    # every sample; events vary only through event_perturbation.
+    # admittance_perturbation's r/x do reach the simulated network (update_powsybl
+    # writes them), but only topology_perturbation changes which elements are in
+    # service, so it alone changes the set of models Dynawo instantiates. Wired for
+    # parity with the static pipeline; effect on dynamic outputs untested.
     generation_generator = initialize_generation_generator(
         getattr(config, "generation_perturbation", _none),
         base_net,
@@ -305,6 +307,8 @@ def _process_dynamic_chunk(args: Tuple) -> Union[List[Dict[str, Any]], List[Exce
                             p2g_maps=net.mapping_p2g,
                             dynamic_mappings=dynamic_mappings,
                             events=dynamic_inputs.events,
+                            event_perturbation=dynamic_inputs.event_perturbation,
+                            seed=seed,
                             dynamic_solver_params=dynamic_solver_params,
                             dynamic_solver=dynamic_solver,
                             julia=julia,
@@ -355,23 +359,29 @@ def process_single_dynamic_simulation(
     admittance_generator: Any = None,
     error_log_file: str = None,
     lf_params: Any = None,
+    event_perturbation: EventPerturbation = EventPerturbation(),
+    seed: int = 0,
 ) -> List[Dict[str, Any]]:
-    """Process one load scenario, expanded over topology perturbations.
+    """Process one load scenario, expanded over topology and event variants.
 
     The load scenario is applied, then generation and admittance perturbations
     (before OPF). Each resulting topology perturbation is processed independently:
     the balanced initial state is computed on the perturbed network (so OPF adapts
     the set-points to the topology and Dynawo initialises from a converged
-    operating point), then the dynamic simulation is run. One sample is produced
-    per ``(scenario_index, perturbation_index, event_index)``; ``event_index`` is
-    0 for now.
+    operating point). Each of the ``event_perturbation.n_event_variants`` event
+    variants then runs the dynamic simulation on its own clone of that balanced
+    variant. One sample is produced per ``(scenario_index, perturbation_index,
+    event_index)``, and the event variants of one topology variant share its
+    ``pf_data``.
 
     Absent generators default to identity, so a scenario yields exactly one
     sample, the pre-perturbation behaviour.
 
-    Each simulation builds its event mapping from ``events``, which replaces the
-    event mapping in ``dynamic_mappings``. Each sample carries the ``events`` it
-    simulated.
+    In ``random`` mode each event variant draws its events with
+    ``default_rng([seed, scenario_index, perturbation_index, event_index])``;
+    otherwise it runs ``events``. Each simulation builds its event mapping from
+    them, which replaces the event mapping in ``dynamic_mappings``. Each sample
+    carries the events it simulated. A failed event variant drops only its sample.
 
     Returns a list of result dicts (possibly empty if every perturbation failed).
     """
@@ -391,6 +401,8 @@ def process_single_dynamic_simulation(
     #       for a single network, so it is the only generator that expands one
     #       load scenario into several samples, hence the loop below and hence
     #       perturbation_index existing at all.
+    #   event variants          : 1 -> M. n_event_variants runs per topology
+    #       variant, hence the inner loop and event_index.
     #
     # Generation + admittance perturbations, applied before OPF.
     net_iter = iter([gfm_net])
@@ -431,22 +443,56 @@ def process_single_dynamic_simulation(
                 lf_params=lf_params,
             )
 
-            # Step 3: dynamic simulation
-            dyn_results = _run_dynamic_simulation(
-                pp_net,
-                dynamic_mappings,
-                events,
-                dynamic_solver_params,
-                dynamic_solver,
+            graph = (
+                EventGraph.from_network(pp_net)
+                if event_perturbation.type == "random"
+                else None
             )
 
-            # Step 4: combine + label with the (scenario, perturbation) key
-            combined = _combine_pf_and_dyn_res(pf_data, dyn_results)
-            combined["scenario_index"] = scenario_index
-            combined["perturbation_index"] = perturbation_index
-            combined["event_index"] = 0
-            combined["events"] = events
-            results.append(combined)
+            # Step 3 and 4: one dynamic simulation per event variant, labelled
+            for event_index in range(event_perturbation.n_event_variants):
+                event_variant_id = f"{variant_id}_event_{event_index}"
+                event_variant_created = False
+                try:
+                    if graph is None:
+                        variant_events = events
+                    else:
+                        variant_events = draw_events(
+                            event_perturbation,
+                            graph,
+                            np.random.default_rng(
+                                [seed, scenario_index, perturbation_index, event_index],
+                            ),
+                        )
+                    pp_net.clone_variant(variant_id, event_variant_id)
+                    event_variant_created = True
+                    pp_net.set_working_variant(event_variant_id)
+
+                    dyn_results = _run_dynamic_simulation(
+                        pp_net,
+                        dynamic_mappings,
+                        variant_events,
+                        dynamic_solver_params,
+                        dynamic_solver,
+                    )
+
+                    combined = _combine_pf_and_dyn_res(pf_data, dyn_results)
+                    combined["scenario_index"] = scenario_index
+                    combined["perturbation_index"] = perturbation_index
+                    combined["event_index"] = event_index
+                    combined["events"] = variant_events
+                    results.append(combined)
+                except Exception as e:
+                    _log_error(
+                        error_log_file,
+                        f"[dynamic] scenario {scenario_index} perturbation "
+                        f"{perturbation_index} event {event_index} failed: {e}\n"
+                        f"{traceback.format_exc()}\n",
+                    )
+                finally:
+                    pp_net.set_working_variant(variant_id)
+                    if event_variant_created:
+                        pp_net.remove_variant(event_variant_id)
         except Exception as e:
             # A single perturbation failing must not drop the whole scenario.
             _log_error(

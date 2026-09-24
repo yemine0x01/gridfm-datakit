@@ -7,6 +7,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 from markers import needs_dynawo
 
@@ -16,6 +17,11 @@ from gridfm_datakit.dynamic.dynawo import (
 )
 from gridfm_datakit.dynamic import load_raw_inputs
 from gridfm_datakit.dynamic import process_dynamic as pdyn
+from gridfm_datakit.dynamic.event_perturbation import (
+    EventPerturbation,
+    parse_event_perturbation,
+)
+from gridfm_datakit.dynamic.placement import EventGraph, PlacementError
 from gridfm_datakit.generate import _setup_environment, _prepare_network_and_scenarios
 from gridfm_datakit.powsybl import load_net
 from gridfm_datakit.utils.param_handler import NestedNamespace
@@ -182,6 +188,8 @@ class TestProcessSingleDynamicSimulation:
         error_log_file=None,
         scenario_index=0,
         events=_EVENTS,
+        event_perturbation=EventPerturbation(),
+        seed=0,
     ):
         scenarios = np.zeros((3, scenario_index + 1, 2))
         return pdyn.process_single_dynamic_simulation(
@@ -197,6 +205,8 @@ class TestProcessSingleDynamicSimulation:
             julia=None,
             topology_generator=topology_generator,
             error_log_file=error_log_file,
+            event_perturbation=event_perturbation,
+            seed=seed,
         )
 
     def test_one_sample_per_topology_perturbation(self, monkeypatch):
@@ -222,7 +232,7 @@ class TestProcessSingleDynamicSimulation:
 
         # the failed sample leaves a hole rather than shifting the others
         assert [r["perturbation_index"] for r in results] == [0, 2]
-        assert "scenario 0 perturbation 1 failed" in error_log.read_text()
+        assert "scenario 0 perturbation 1 event 0 failed" in error_log.read_text()
 
     def test_every_variant_is_removed_even_when_the_simulation_fails(
         self,
@@ -271,6 +281,134 @@ class TestProcessSingleDynamicSimulation:
         assert all(result["events"] is events for result in results)
 
 
+_RANDOM_EVENTS = parse_event_perturbation(
+    {
+        "type": "random",
+        "n_event_variants": 3,
+        "scenarios": [
+            {
+                "name": "generator_trip",
+                "start_time": {"distribution": "uniform", "low": 20, "high": 80},
+                "events": [
+                    {
+                        "type": "Disconnect",
+                        "target": {"element": "generator", "distance": [0, 1]},
+                    },
+                ],
+            },
+        ],
+    },
+    0.0,
+    100.0,
+)
+
+
+def _chain_graph():
+    buses = [f"B{i}" for i in range(4)]
+    return EventGraph(
+        adjacency={
+            bus: tuple(b for b in buses if abs(int(b[1:]) - int(bus[1:])) == 1)
+            for bus in buses
+        },
+        candidates={
+            "bus": tuple((bus, (bus,)) for bus in buses),
+            "generator": tuple((f"G{i}", (f"B{i}",)) for i in range(4)),
+            "load": (),
+            "line": (),
+            "transformer": (),
+        },
+    )
+
+
+class TestEventVariants:
+    @staticmethod
+    def _stub(monkeypatch):
+        _, seen_events = _stub_solver_steps(monkeypatch)
+        static_calls = []
+
+        def _static_state(**kwargs):
+            static_calls.append(kwargs)
+            return None, {"bus": np.zeros((2, 3))}
+
+        monkeypatch.setattr(pdyn, "_compute_balanced_static_state", _static_state)
+        monkeypatch.setattr(
+            pdyn.EventGraph,
+            "from_network",
+            classmethod(lambda cls, pp_net: _chain_graph()),
+        )
+        return static_calls, seen_events
+
+    @staticmethod
+    def _run(pp_net, seed, n_topologies=2, error_log_file=None):
+        return TestProcessSingleDynamicSimulation._run(
+            pp_net,
+            _ListTopologyGenerator(n_topologies),
+            error_log_file=error_log_file,
+            event_perturbation=_RANDOM_EVENTS,
+            seed=seed,
+        )
+
+    def test_every_topology_variant_runs_every_event_variant(self, monkeypatch):
+        static_calls, _ = self._stub(monkeypatch)
+        pp_net = _FakePpNet()
+
+        results = self._run(pp_net, seed=5)
+
+        assert [(r["perturbation_index"], r["event_index"]) for r in results] == [
+            (p, e) for p in range(2) for e in range(3)
+        ]
+        assert len(static_calls) == 2
+        for p in range(2):
+            shared = [r["pf_data"] for r in results if r["perturbation_index"] == p]
+            assert all(pf is shared[0] for pf in shared)
+        assert pp_net.live_variants == set()
+        assert pp_net.get_working_variant_id() == "base"
+
+    def test_draws_depend_on_the_seed_only(self, monkeypatch):
+        self._stub(monkeypatch)
+
+        def events(seed):
+            return [r["events"] for r in self._run(_FakePpNet(), seed=seed)]
+
+        first, again, other = events(5), events(5), events(6)
+        for a, b in zip(first, again):
+            pd.testing.assert_frame_equal(a, b)
+        assert any(not a.equals(b) for a, b in zip(first, other))
+        for frame in first:
+            assert frame["static_id"].str.startswith("G").all()
+            assert frame["start_time"].between(20, 80, inclusive="left").all()
+
+    def test_a_failed_placement_drops_only_its_event_variant(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        self._stub(monkeypatch)
+        draws = []
+        real_draw_events = pdyn.draw_events
+
+        def _draw_events(perturbation, graph, rng):
+            draws.append(len(draws))
+            if len(draws) == 2:
+                raise PlacementError("no generator in range")
+            return real_draw_events(perturbation, graph, rng)
+
+        monkeypatch.setattr(pdyn, "draw_events", _draw_events)
+        pp_net = _FakePpNet()
+        error_log = tmp_path / "error.log"
+
+        results = self._run(
+            pp_net,
+            seed=5,
+            n_topologies=1,
+            error_log_file=str(error_log),
+        )
+
+        assert [r["event_index"] for r in results] == [0, 2]
+        assert "scenario 0 perturbation 0 event 1 failed" in error_log.read_text()
+        assert pp_net.live_variants == set()
+
+
 def _chunk_args(
     start_idx=0,
     end_idx=2,
@@ -284,7 +422,10 @@ def _chunk_args(
         end_idx,
         np.zeros((3, max(end_idx, 1), 2)),  # scenarios
         "network.iidm",  # network_path
-        types.SimpleNamespace(events="events"),  # dynamic_inputs
+        types.SimpleNamespace(
+            events="events",
+            event_perturbation=EventPerturbation(),
+        ),  # dynamic_inputs
         dynamic_solver,
         error_log_file,
         200,  # max_iter

@@ -309,6 +309,16 @@ def test_no_events_writes_no_table(tmp_path):
     assert "events" not in file_paths
 
 
+def test_empty_events_write_no_table(tmp_path):
+    empty = pd.DataFrame(columns=["event_name", "static_id", "start_time", "params"])
+    file_paths = {}
+    out = tmp_path / "dyn"
+    out.mkdir(parents=True)
+    _write([_result(0, events=empty), _result(1, events=empty)], out, file_paths)
+    assert not (out / "events.parquet").exists()
+    assert "events" not in file_paths
+
+
 # ---------------------------------------------------------------------------
 # Final state values
 # ---------------------------------------------------------------------------
