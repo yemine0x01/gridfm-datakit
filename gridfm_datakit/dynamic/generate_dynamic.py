@@ -43,6 +43,10 @@ import pandas as pd
 import yaml
 
 from gridfm_datakit.dynamic import load_raw_inputs
+from gridfm_datakit.dynamic.event_perturbation import (
+    EVENT_COLUMNS,
+    check_event_perturbation,
+)
 from gridfm_datakit.generate import _prepare_network_and_scenarios, _setup_environment
 from gridfm_datakit.process.solver_output import SolverVerbosity
 from gridfm_datakit.utils.column_names import (
@@ -179,6 +183,7 @@ def generate_dynamic_data(
 
     # --- Step 3: dynamic inputs ---
     dynamic_inputs = load_raw_inputs(args)
+    check_event_perturbation(dynamic_inputs.event_perturbation, meta["network_path"])
 
     # --- Step 4: output directory ---
     # Single root: everything this run produces lives under settings.data_dir, in
@@ -381,8 +386,6 @@ def _final_state_values_to_mapping(fsv: Any) -> Dict[str, float]:
 # Repeated by scenario_index, which the writer inserts. The shared validation
 # suite already treats load_scenario_idx as optional.
 _REDUNDANT_STATIC_COLUMNS = ["load_scenario_idx"]
-
-_EVENT_COLUMNS = ["event_name", "static_id", "start_time", "params"]
 
 
 class _DynamicDataWriter:
@@ -597,9 +600,9 @@ class _DynamicDataWriter:
         frames = []
         for result in results:
             events = result.get("events")
-            if events is None:
+            if events is None or events.empty:
                 continue
-            frame = events[_EVENT_COLUMNS].reset_index(drop=True)
+            frame = events[EVENT_COLUMNS].reset_index(drop=True)
             frame.insert(0, "event_index", result.get("event_index", 0))
             frame.insert(0, "perturbation_index", result.get("perturbation_index", 0))
             frame.insert(0, "scenario_index", result["scenario_index"])

@@ -135,6 +135,63 @@ def test_events_are_recorded_for_every_sample(config_ieee14):
 
 
 @needs_dynawo
+def test_random_events_are_drawn_per_event_variant(config_ieee14):
+    import pandas as pd
+    import pypowsybl.network as pn
+
+    config_ieee14.dynamic.solver_parameters.stop_time = 60.0
+    del config_ieee14.dynamic.input_files.events_file
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(
+        type="random",
+        n_event_variants=3,
+        scenarios=[
+            {
+                "name": "generator_trip",
+                "start_time": {"distribution": "uniform", "low": 20, "high": 50},
+                "events": [
+                    {
+                        "type": "Disconnect",
+                        "target": {"element": "generator", "distance": [0, 2]},
+                    },
+                ],
+            },
+        ],
+    )
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+    error_log = Path(file_paths["error_log"])
+    assert metadata["n_samples"] == 3, error_log.read_text()
+
+    events = pd.read_parquet(file_paths["events"])
+    assert events["event_index"].tolist() == [0, 1, 2]
+    generators = set(pn.load(config_ieee14.network.file).get_generators().index)
+    assert set(events["static_id"]) <= generators
+    assert len(set(zip(events["static_id"], events["start_time"]))) == 3
+    assert events["start_time"].between(20, 50, inclusive="left").all()
+
+    bus = pd.read_parquet(file_paths["bus_data"])
+    samples = [
+        frame.drop(columns="event_index").reset_index(drop=True)
+        for _, frame in bus.groupby("event_index")
+    ]
+    assert len(samples) == 3
+    assert all(sample.equals(samples[0]) for sample in samples)
+
+
+@needs_dynawo
+def test_no_events_writes_no_event_table(config_ieee14):
+    del config_ieee14.dynamic.input_files.events_file
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(type="none")
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+
+    assert metadata["n_samples"] == 1
+    assert "events" not in file_paths
+
+
+@needs_dynawo
 def test_validate_flag_runs_the_validation_suite(config_ieee14, monkeypatch):
     config_ieee14.dynamic.validate = True
     seen = {}
@@ -191,7 +248,7 @@ def test_topology_perturbation_expands_scenarios_into_samples(config_ieee14):
         flags=re.MULTILINE,
     ), error_log
     failures = re.findall(
-        r"^\[dynamic\] scenario \d+ perturbation \d+ failed",
+        r"^\[dynamic\] scenario \d+ perturbation \d+ (event \d+ )?failed",
         error_log,
         flags=re.MULTILINE,
     )
