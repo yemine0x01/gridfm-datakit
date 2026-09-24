@@ -100,7 +100,7 @@ def iter_dynamic_simulations(
         One list per large chunk, holding one dict per successfully processed
         (scenario, topology-perturbation) sample, each with keys ``"pf_data"``,
         ``"dynamic_results"``, ``"scenario_index"``, ``"perturbation_index"``,
-        ``"event_index"``.
+        ``"event_index"``, ``"events"``.
         A chunk whose scenarios all failed yields an empty list.
     """
     n_scenarios = config.load.scenarios
@@ -370,7 +370,8 @@ def process_single_dynamic_simulation(
     sample, the pre-perturbation behaviour.
 
     Each simulation builds its event mapping from ``events``, which replaces the
-    event mapping in ``dynamic_mappings``.
+    event mapping in ``dynamic_mappings``. Each sample carries the ``events`` it
+    simulated.
 
     Returns a list of result dicts (possibly empty if every perturbation failed).
     """
@@ -444,6 +445,7 @@ def process_single_dynamic_simulation(
             combined["scenario_index"] = scenario_index
             combined["perturbation_index"] = perturbation_index
             combined["event_index"] = 0
+            combined["events"] = events
             results.append(combined)
         except Exception as e:
             # A single perturbation failing must not drop the whole scenario.

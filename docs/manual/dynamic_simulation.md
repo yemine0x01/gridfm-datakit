@@ -541,6 +541,7 @@ static pipeline's `{data_dir}/{network.name}/raw/`:
     ├── y_bus_data.parquet
     ├── runtime_data.parquet
     ├── final_state_values.parquet     only when FinalStateValue rows are monitored
+    ├── events.parquet
     ├── dynamic_results.zarr/
     ├── reports/
     └── metadata.json
@@ -599,6 +600,12 @@ column per monitored `FinalStateValue` variable. Written only when the run
 declares such rows. The column set is fixed by the first chunk that carries
 values; a later sample reporting a different set is reindexed onto it (unknown
 names dropped, missing ones become `NaN`).
+
+### `events.parquet`
+
+One row per event per sample, keyed by `(scenario_index, perturbation_index,
+event_index)`, with the event columns `event_name`, `static_id`, `start_time` and
+`params`. It records the events each sample simulated.
 
 ### `reports/`
 

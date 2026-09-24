@@ -117,6 +117,24 @@ def test_several_final_state_values_each_get_a_column(config_ieee14_multi_fsv):
 
 
 @needs_dynawo
+def test_events_are_recorded_for_every_sample(config_ieee14):
+    import pandas as pd
+
+    events = pd.read_csv(config_ieee14.dynamic.input_files.events_file)
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+
+    key = ["scenario_index", "perturbation_index", "event_index"]
+    recorded = pd.read_parquet(file_paths["events"])
+    bus = pd.read_parquet(file_paths["bus_data"])
+    assert len(recorded) == metadata["n_samples"] * len(events)
+    assert set(map(tuple, recorded[key].to_numpy())) == set(
+        map(tuple, bus[key].to_numpy()),
+    )
+
+
+@needs_dynawo
 def test_validate_flag_runs_the_validation_suite(config_ieee14, monkeypatch):
     config_ieee14.dynamic.validate = True
     seen = {}

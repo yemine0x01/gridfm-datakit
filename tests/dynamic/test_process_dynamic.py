@@ -64,6 +64,7 @@ def test_process_single_dynamic_simulation(config_ieee14):
         "scenario_index",
         "perturbation_index",
         "event_index",
+        "events",
     }
     assert sample["scenario_index"] == 0 and sample["perturbation_index"] == 0
     assert sample["event_index"] == 0
@@ -263,10 +264,11 @@ class TestProcessSingleDynamicSimulation:
         _, seen_events = _stub_solver_steps(monkeypatch)
         events = object()
 
-        self._run(_FakePpNet(), _ListTopologyGenerator(3), events=events)
+        results = self._run(_FakePpNet(), _ListTopologyGenerator(3), events=events)
 
         assert len(seen_events) == 3
         assert all(seen is events for seen in seen_events)
+        assert all(result["events"] is events for result in results)
 
 
 def _chunk_args(

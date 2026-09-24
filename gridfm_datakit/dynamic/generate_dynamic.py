@@ -382,6 +382,8 @@ def _final_state_values_to_mapping(fsv: Any) -> Dict[str, float]:
 # suite already treats load_scenario_idx as optional.
 _REDUNDANT_STATIC_COLUMNS = ["load_scenario_idx"]
 
+_EVENT_COLUMNS = ["event_name", "static_id", "start_time", "params"]
+
 
 class _DynamicDataWriter:
     """Incremental writer for one dynamic run's outputs.
@@ -407,6 +409,7 @@ class _DynamicDataWriter:
       y_bus_data.parquet
       runtime_data.parquet
       final_state_values.parquet  ← only when the run monitors FinalStateValue rows
+      events.parquet              ← the events each sample simulated
       dynamic_results.zarr/       ← shape (n_samples, n_variables, n_timesteps)
       reports/                    ← one Dynawo report per sample
       metadata.json
@@ -474,6 +477,7 @@ class _DynamicDataWriter:
             return
         self._start()
         self._write_static(results)
+        self._write_events(results)
         self._write_curves(results)
         self._write_reports(results)
         self.n_samples += len(results)
@@ -584,6 +588,25 @@ class _DynamicDataWriter:
             + self.fsv_names,
         )
         self._append_parquet("final_state_values", frame)
+
+    def _write_events(self, results: List[Dict[str, Any]]) -> None:
+        """Append one row per event per sample, keyed like the static snapshot.
+
+        No sample carrying events, no file.
+        """
+        frames = []
+        for result in results:
+            events = result.get("events")
+            if events is None:
+                continue
+            frame = events[_EVENT_COLUMNS].reset_index(drop=True)
+            frame.insert(0, "event_index", result.get("event_index", 0))
+            frame.insert(0, "perturbation_index", result.get("perturbation_index", 0))
+            frame.insert(0, "scenario_index", result["scenario_index"])
+            frames.append(frame)
+        if not frames:
+            return
+        self._append_parquet("events", pd.concat(frames, ignore_index=True))
 
     def _append_parquet(self, key: str, frame: pd.DataFrame) -> None:
         """Append a row group to ``key``'s Parquet file, opening it on first use.

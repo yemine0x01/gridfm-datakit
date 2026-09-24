@@ -75,6 +75,8 @@ out/                                    <- settings.data_dir
         │       (scenario_index, perturbation_index, event_index). This triple
         │       replaces the static pipeline's load_scenario_idx, which cannot
         │       tell two perturbations of one load scenario apart
+        ├── events.parquet
+        │       the events each sample simulated, one row per event, same key
         ├── dynamic_results.zarr/
         │       curves (n_samples, n_variables, n_timesteps) + scenario_index /
         │       perturbation_index / event_index coordinate arrays; join the two
