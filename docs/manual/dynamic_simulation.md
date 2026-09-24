@@ -19,23 +19,25 @@ For every load scenario, and for every topology perturbation of it:
 3. **Set-points are pushed to pypowsybl**, then an **AC power flow** is solved
    with OpenLoadFlow. This is the *balanced initial state*: Dynawo initialises
    the grid state from it.
-4. **Dynawo runs the time-domain simulation** on that balanced network, applying
-   the events declared in the input tables and recording the monitored
-   variables.
+4. **Dynawo runs the time-domain simulation** once per event variant, each on
+   its own copy of that balanced network, applying the events of `events_file`
+   or, with [`dynamic.event_perturbation`](#dynamicevent_perturbation-optional),
+   the events drawn for that variant, and recording the monitored variables.
 5. The static snapshot (Parquet) and the trajectory (Zarr) are written, both
    tagged with the same `(scenario_index, perturbation_index, event_index)` key.
 
 Each `(scenario, perturbation, event)` triple is one **sample**. `event_index`
-numbers the event variants of a sample and is 0 while events come from
-`events_file`. Load scenarios are
+numbers the event variants of a topology variant: always 0 with `events_file`,
+0 to `n_event_variants - 1` with random events. Load scenarios are
 distributed across worker processes (the perturbations of a single scenario run
 sequentially inside one worker), and results are written incrementally, one large
 chunk at a time, so peak memory tracks `settings.large_chunk_size` rather than
 the size of the whole dataset.
 
 !!! warning "The dynamic model set is fixed across samples"
-    The dynamic models, automation systems and events come from the CSV input
-    tables and are **identical for every sample**. What varies from sample to
+    The dynamic models and automation systems come from the CSV input tables and
+    are **identical for every sample**. So are the events, unless
+    `dynamic.event_perturbation` draws them. What varies from sample to
     sample is the operating point Dynawo starts from, plus, with
     `topology_perturbation` enabled, which elements are in service and hence
     which of those dynamic models Dynawo instantiates.
@@ -199,6 +201,9 @@ A run with no automation system still needs the file. Write the header row only.
 
 The disturbance sequence. This is what makes the trajectory non-trivial.
 
+Read only when `dynamic.event_perturbation` is absent or of type `file`. With
+type `none` or `random` the key is optional, and ignored with a warning when set.
+
 | Column | Description |
 | --- | --- |
 | `event_name` | Event type (see table below) |
@@ -220,7 +225,8 @@ Disconnect,_GEN____2_SM,50,disconnect_only=;
 ```
 
 `start_time` must lie inside the `[start_time, stop_time]` window of
-`dynamic.solver_parameters`, otherwise the event never fires.
+`dynamic.solver_parameters`, otherwise the event never fires. These times are
+not checked.
 
 ### `variables_file`
 
@@ -328,6 +334,72 @@ to sit on a machine that carries a dynamic model. OpenLoadFlow's own default
 initialise from a state its machine models cannot reproduce. `provider_parameters`
 is a free-form pass-through to OpenLoadFlow; the other three keys are the only
 top-level ones accepted.
+
+### `dynamic.event_perturbation` (optional)
+
+Draws the events of each sample instead of replaying `events_file`:
+
+```yaml
+dynamic:
+  event_perturbation:
+    type: random
+    n_event_variants: 3
+    scenarios:
+      - name: generator_trip
+        anchor: random
+        start_time: {distribution: uniform, low: 20, high: 80}
+        events:
+          - type: Disconnect
+            target: {element: generator, distance: [0, 2]}
+```
+
+| `type` | Events of every sample |
+| --- | --- |
+| `none` | None. `events_file` is optional and ignored |
+| `file` | The rows of `events_file`. The default when the block is absent |
+| `random` | Drawn per event variant from `scenarios` |
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `type` | required | `none`, `file` or `random` |
+| `n_event_variants` | `1` | Event variants per topology variant; must be 1 unless `random` |
+| `scenarios` | | `random` only, exactly one entry for now |
+| `scenarios[].name` | required | Named in `raw/error.log` |
+| `scenarios[].anchor` | `random` | The bus targets are placed around: a bus ID of the network file, or `random` for one drawn per event variant |
+| `scenarios[].start_time` | required | Event time in seconds, a value spec, positive |
+| `scenarios[].events` | required | Exactly one entry for now |
+| `events[].type` | required | `Disconnect`, the whole element |
+| `events[].target.element` | required | `bus`, `generator`, `load`, `line` or `transformer` |
+| `events[].target.distance` | required | Hops from the anchor, an integer or an inclusive `[min, max]` |
+
+Every level rejects unknown keys and names their path, for example
+`dynamic.event_perturbation.scenarios[0].weight`.
+
+A value spec is a number, fixed, or one of:
+
+| Form | Draw |
+| --- | --- |
+| `{distribution: normal, mean, std, min, max}` | Normal truncated to `[min, max]`, both optional |
+| `{distribution: uniform, low, high}` | Uniform on `[low, high)` |
+| `{distribution: choice, values, weights}` | One of `values`, `weights` optional |
+
+Values outside the bounds are redrawn, never clipped.
+
+`distance` counts branch hops from the anchor over the lines and two-winding
+transformers in service after the topology perturbation. A generator or load
+sits at its bus's distance, a branch at its nearer end's. A random anchor is
+redrawn, up to 100 times, when a target cannot be placed around it. A fixed
+anchor is checked against the network file before any simulation.
+
+Every value `start_time` can take must lie inside the `[start_time, stop_time]`
+window of `dynamic.solver_parameters`, checked when the config is loaded. For a
+normal that range is `mean ± 6 std`, cut by `min` and `max`.
+
+Each event variant draws from
+`numpy.random.default_rng([settings.seed, scenario_index, perturbation_index,
+event_index])`, so a seed gives the same events whatever `num_processes` and
+`large_chunk_size`. The event variants of one topology variant share its OPF and
+power flow: their Parquet snapshot rows are identical except `event_index`.
 
 ### `dynamic.logging` and `dynamic.validate` (optional)
 
@@ -605,7 +677,8 @@ names dropped, missing ones become `NaN`).
 
 One row per event per sample, keyed by `(scenario_index, perturbation_index,
 event_index)`, with the event columns `event_name`, `static_id`, `start_time` and
-`params`. It records the events each sample simulated.
+`params`. It records the events each sample simulated, read from `events_file`
+or drawn. With `event_perturbation.type: none` no file is written.
 
 ### `reports/`
 
@@ -666,13 +739,15 @@ initial_state = bus[
 ## Failure handling
 
 Failures are contained at the smallest scope that makes sense, so one bad sample
-never aborts a run. Per-perturbation and per-scenario failures are appended to
+never aborts a run. Per-event-variant, per-perturbation and per-scenario failures
+are appended to
 `raw/error.log` with their traceback. A worker that dies before reaching its
 scenario loop never gets to write there, so the parent reports it through the
 progress logger instead:
 
 | Failure | Behaviour | Reported in |
 | --- | --- | --- |
+| One event variant fails (placement or simulation) | The topology variant's other event variants continue | `raw/error.log`, as `scenario i perturbation j event k failed` |
 | One topology perturbation fails | The scenario's other perturbations continue | `raw/error.log` |
 | One scenario fails | The rest of the chunk continues | `raw/error.log` |
 | A whole worker dies | The other workers and chunks continue | progress logger, as `Error in dynamic chunk: …` |
@@ -714,9 +789,12 @@ reports neither:
 
 - Dynawo is the only backend. `dynamic_solver` is the extension point, but any
   other value raises `NotImplementedError`.
-- The dynamic model set, automation systems and events are the same for every
-  sample. What varies is the operating point, the branch impedances (with
-  `admittance_perturbation`) and the topology (with `topology_perturbation`).
+- The dynamic model set and automation systems are the same for every sample,
+  and so are the events unless `event_perturbation` draws them. What varies is
+  the operating point, the branch impedances (with `admittance_perturbation`)
+  and the topology (with `topology_perturbation`).
+- Random events are `Disconnect` only, one scenario of one event.
+- `events_file` times are not checked against the simulation window.
 - `generation_perturbation` does not work: the powsybl reader supplies no real
   generator costs for it to perturb.
 - The `TapChangerBlocking` automation system cannot be configured from the CSV
