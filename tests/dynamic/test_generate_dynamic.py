@@ -76,12 +76,16 @@ def test_final_state_values_reach_the_output(config_ieee14):
     path = Path(file_paths["final_state_values"])
     assert path.is_file()
     frame = pd.read_parquet(path)
-    assert list(frame.columns[:2]) == ["scenario_index", "perturbation_index"]
+    assert list(frame.columns[:3]) == [
+        "scenario_index",
+        "perturbation_index",
+        "event_index",
+    ]
 
     metadata = json.loads(Path(file_paths["metadata"]).read_text())
     names = metadata["final_state_value_names"]
     assert names, "the run monitors a FinalStateValue row, so names must be recorded"
-    assert list(frame.columns[2:]) == names
+    assert list(frame.columns[3:]) == names
     assert len(frame) == metadata["n_samples"]
     assert frame[names].notna().all().all()
 
@@ -101,7 +105,8 @@ def test_several_final_state_values_each_get_a_column(config_ieee14_multi_fsv):
     names = metadata["final_state_value_names"]
 
     assert len(names) == 3, names
-    assert list(frame.columns) == ["scenario_index", "perturbation_index"] + names
+    key = ["scenario_index", "perturbation_index", "event_index"]
+    assert list(frame.columns) == key + names
     assert frame[names].notna().all().all()
     # distinct models, so not one number repeated
     assert frame[names].iloc[0].nunique() > 1

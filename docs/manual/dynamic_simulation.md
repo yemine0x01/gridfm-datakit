@@ -23,9 +23,11 @@ For every load scenario, and for every topology perturbation of it:
    the events declared in the input tables and recording the monitored
    variables.
 5. The static snapshot (Parquet) and the trajectory (Zarr) are written, both
-   tagged with the same `(scenario_index, perturbation_index)` key.
+   tagged with the same `(scenario_index, perturbation_index, event_index)` key.
 
-Each `(scenario, perturbation)` pair is one **sample**. Load scenarios are
+Each `(scenario, perturbation, event)` triple is one **sample**. `event_index`
+numbers the event variants of a sample and is 0 while events come from
+`events_file`. Load scenarios are
 distributed across worker processes (the perturbations of a single scenario run
 sequentially inside one worker), and results are written incrementally, one large
 chunk at a time, so peak memory tracks `settings.large_chunk_size` rather than
@@ -558,9 +560,9 @@ the static pipeline ([Outputs](outputs.md)) with two differences:
 
 - The files are **flat Parquet files**, not partitioned directories.
 - The static pipeline's `scenario` / `load_scenario_idx` columns are replaced by
-  the pair **`scenario_index`, `perturbation_index`**, inserted as the first two
-  columns. `load_scenario_idx` cannot tell two topology perturbations of one
-  load scenario apart; this pair can.
+  the triple **`scenario_index`, `perturbation_index`, `event_index`**, inserted
+  as the first three columns. `load_scenario_idx` cannot tell two topology
+  perturbations of one load scenario apart; this triple can.
 
 ### Trajectories (`dynamic_results.zarr`)
 
@@ -570,6 +572,7 @@ the static pipeline ([Outputs](outputs.md)) with two differences:
 | `time` | `(n_samples_with_curves, n_timesteps)` | Simulation time in **seconds**, per sample, NaN-padded to match |
 | `scenario_index` | `(n_samples_with_curves,)` | Join key: the load scenario each slice came from |
 | `perturbation_index` | `(n_samples_with_curves,)` | Join key: the topology perturbation each slice came from |
+| `event_index` | `(n_samples_with_curves,)` | Join key: the event variant each slice came from |
 
 Axis 0 is the number of samples that produced curves, reported in
 `metadata.json` as `n_samples_with_curves`. Take the length from there rather
@@ -590,7 +593,8 @@ input table.
 
 ### `final_state_values.parquet`
 
-One row per sample, keyed by `(scenario_index, perturbation_index)`, with one
+One row per sample, keyed by `(scenario_index, perturbation_index, event_index)`,
+with one
 column per monitored `FinalStateValue` variable. Written only when the run
 declares such rows. The column set is fixed by the first chunk that carries
 values; a later sample reporting a different set is reindexed onto it (unknown
@@ -598,7 +602,7 @@ names dropped, missing ones become `NaN`).
 
 ### `reports/`
 
-One JSON file per sample, `scenario_{i}_perturbation_{j}.json`, holding
+One JSON file per sample, `scenario_{i}_perturbation_{j}_event_{k}.json`, holding
 pypowsybl's `ReportNode`, covering the model build-up and problem resolution. This is
 the documented way to diagnose a failed or degenerate run. Controlled by
 `dynamic.logging.save_reports`. Report verbosity can be raised through the
@@ -613,8 +617,8 @@ Dynawo simulation parameter `log.levelFilter`.
 | `n_samples_with_curves` | Length of axis 0 of `curves` |
 | `variable_names`, `n_variables` | Axis 1 of `curves`, in order |
 | `n_timesteps`, `timesteps_per_scenario`, `time_units` | Axis 2 of `curves`; the per-sample valid (unpadded) length |
-| `static_scenario_index`, `static_perturbation_index` | Join keys present in the Parquet snapshot |
-| `dynamic_scenario_index`, `dynamic_perturbation_index` | Join keys present in the Zarr store |
+| `static_scenario_index`, `static_perturbation_index`, `static_event_index` | Join keys present in the Parquet snapshot |
+| `dynamic_scenario_index`, `dynamic_perturbation_index`, `dynamic_event_index` | Join keys present in the Zarr store |
 | `final_state_value_names` | Columns of `final_state_values.parquet`, in order |
 | `reports` | Report file names |
 
@@ -624,8 +628,8 @@ A sample reaches the outputs only when every step succeeded: a failed OPF, a
 failed power flow or a failed Dynawo run drops the whole sample, its static rows
 included. So a curves slice index is **not** a scenario number: failed samples
 leave gaps, and a run with `topology_perturbation` has several slices per load
-scenario. **Always join on the `(scenario_index, perturbation_index)` key pair,
-never on row or slice position.**
+scenario. **Always join on the `(scenario_index, perturbation_index, event_index)`
+key triple, never on row or slice position.**
 
 ```python
 import json
@@ -640,14 +644,16 @@ meta = json.loads((root / "metadata.json").read_text())
 store = zarr.open(str(root / "dynamic_results.zarr"), mode="r")
 bus = pd.read_parquet(root / "bus_data.parquet")
 
-keys = list(zip(np.asarray(store["scenario_index"]), np.asarray(store["perturbation_index"])))
-slice_of = {(int(s), int(p)): i for i, (s, p) in enumerate(keys)}
+keys = zip(*(np.asarray(store[k]) for k in ("scenario_index", "perturbation_index", "event_index")))
+slice_of = {tuple(int(v) for v in key): i for i, key in enumerate(keys)}
 
-i = slice_of[(0, 0)]
+i = slice_of[(0, 0, 0)]
 n = meta["timesteps_per_scenario"][i]          # drop the NaN padding
 t = store["time"][i, :n]                       # seconds
 u = store["curves"][i, meta["variable_names"].index("_BUS____2_TN_U_value"), :n]
-initial_state = bus[(bus.scenario_index == 0) & (bus.perturbation_index == 0)]
+initial_state = bus[
+    (bus.scenario_index == 0) & (bus.perturbation_index == 0) & (bus.event_index == 0)
+]
 ```
 
 ## Failure handling

@@ -167,7 +167,8 @@ def _run_validation_checks(
     Split out of validate_generated_data so the static and dynamic pipelines can
     share exactly the same checks despite storing their data differently: the
     static one writes partitioned parquet keyed by a ``scenario`` column, the
-    dynamic one writes flat parquet keyed by (scenario_index, perturbation_index).
+    dynamic one writes flat parquet keyed by (scenario_index, perturbation_index,
+    event_index).
     Every check below reads only the DataFrames in ``generated_data``, so the
     caller just has to supply them with a ``scenario`` column.
 
@@ -323,13 +324,14 @@ def validate_dynamic_data(
     lays them out differently, so validate_generated_data cannot read them directly:
 
     * flat single-file parquet, not partitioned directories (no ``n_scenarios.txt``);
-    * a sample is keyed by the pair (scenario_index, perturbation_index), because a
-      topology perturbation expands one load scenario into several samples, whereas
-      the static schema has a single ``scenario`` column.
+    * a sample is keyed by the triple (scenario_index, perturbation_index,
+      event_index), because topology perturbations and event variants expand one
+      load scenario into several samples, whereas the static schema has a single
+      ``scenario`` column.
 
     This loader bridges the two: it reads the flat files and adds a dense
-    ``scenario`` column by ranking the distinct (scenario_index, perturbation_index)
-    pairs, so each dynamic sample becomes one "scenario" from the checks' point of
+    ``scenario`` column by ranking the distinct (scenario_index, perturbation_index,
+    event_index) triples, so each dynamic sample becomes one "scenario" from the checks' point of
     view. The checks themselves are shared verbatim with the static pipeline.
 
     Note this validates the *static snapshot* (the initial operating point Dynawo
@@ -349,7 +351,7 @@ def validate_dynamic_data(
     Raises:
         AssertionError: If any validation fails.
     """
-    KEY = ["scenario_index", "perturbation_index"]
+    KEY = ["scenario_index", "perturbation_index", "event_index"]
 
     def _read(key: str) -> pd.DataFrame:
         df = pd.read_parquet(file_paths[key], engine="pyarrow")
@@ -363,9 +365,13 @@ def validate_dynamic_data(
     bus_keys = pd.read_parquet(file_paths["bus_data"], columns=KEY, engine="pyarrow")
     unique_keys = bus_keys.drop_duplicates().sort_values(KEY)
     sample_ids = {
-        (int(s), int(p)): i
-        for i, (s, p) in enumerate(
-            zip(unique_keys["scenario_index"], unique_keys["perturbation_index"]),
+        (int(s), int(p), int(e)): i
+        for i, (s, p, e) in enumerate(
+            zip(
+                unique_keys["scenario_index"],
+                unique_keys["perturbation_index"],
+                unique_keys["event_index"],
+            ),
         )
     }
 

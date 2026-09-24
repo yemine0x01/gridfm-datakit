@@ -72,13 +72,13 @@ out/                                    <- settings.data_dir
         ├── bus_data.parquet / gen_data.parquet / branch_data.parquet
         │   y_bus_data.parquet / runtime_data.parquet
         │       static PF snapshot (features), tagged with
-        │       (scenario_index, perturbation_index). This pair replaces the
-        │       static pipeline's load_scenario_idx, which cannot tell two
-        │       perturbations of one load scenario apart
+        │       (scenario_index, perturbation_index, event_index). This triple
+        │       replaces the static pipeline's load_scenario_idx, which cannot
+        │       tell two perturbations of one load scenario apart
         ├── dynamic_results.zarr/
         │       curves (n_samples, n_variables, n_timesteps) + scenario_index /
-        │       perturbation_index coordinate arrays; join the two modalities on
-        │       this key pair
+        │       perturbation_index / event_index coordinate arrays; join the two
+        │       modalities on this key triple
         ├── reports/
         │       one Dynawo report (JSON) per sample: model build-up + convergence
         └── metadata.json

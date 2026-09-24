@@ -63,8 +63,10 @@ def test_process_single_dynamic_simulation(config_ieee14):
         "dynamic_results",
         "scenario_index",
         "perturbation_index",
+        "event_index",
     }
     assert sample["scenario_index"] == 0 and sample["perturbation_index"] == 0
+    assert sample["event_index"] == 0
 
 
 @needs_dynawo
@@ -204,6 +206,7 @@ class TestProcessSingleDynamicSimulation:
 
         assert [r["perturbation_index"] for r in results] == [0, 1, 2]
         assert {r["scenario_index"] for r in results} == {0}
+        assert all(r["event_index"] == 0 for r in results)
 
     def test_a_failed_perturbation_does_not_drop_the_scenario(
         self,

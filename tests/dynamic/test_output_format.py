@@ -40,6 +40,7 @@ def _result(
     scenario_index,
     *,
     perturbation_index=0,
+    event_index=0,
     static=True,
     dynamic=True,
     n_timesteps=5,
@@ -71,6 +72,7 @@ def _result(
         "dynamic_results": dr,
         "scenario_index": scenario_index,
         "perturbation_index": perturbation_index,
+        "event_index": event_index,
     }
 
 
@@ -171,6 +173,7 @@ def test_static_snapshot_is_at_parity_with_static_pipeline(tmp_path):
     assert list(y_bus.columns) == [
         "scenario_index",
         "perturbation_index",
+        "event_index",
         "index1",
         "index2",
         "G",
@@ -182,6 +185,7 @@ def test_static_snapshot_is_at_parity_with_static_pipeline(tmp_path):
     assert list(runtime.columns) == [
         "scenario_index",
         "perturbation_index",
+        "event_index",
         "ac",
     ]
     assert runtime["scenario_index"].tolist() == [7, 9]
@@ -194,7 +198,11 @@ def test_load_scenario_idx_is_not_duplicated_by_scenario_index(tmp_path):
     for name in ("bus_data", "branch_data", "gen_data", "y_bus_data", "runtime_data"):
         frame = pd.read_parquet(out / f"{name}.parquet")
         assert "load_scenario_idx" not in frame.columns, name
-        assert list(frame.columns[:2]) == ["scenario_index", "perturbation_index"]
+        assert list(frame.columns[:3]) == [
+            "scenario_index",
+            "perturbation_index",
+            "event_index",
+        ]
 
 
 def test_topology_perturbations_labeled_by_composite_key(tmp_path):
@@ -219,6 +227,22 @@ def test_topology_perturbations_labeled_by_composite_key(tmp_path):
     assert meta["dynamic_perturbation_index"] == [0, 1]
     # the two perturbations are distinct slices of the same scenario
     assert grp["curves"].shape[0] == 2
+
+
+def test_event_variants_of_one_sample_are_keyed_apart(tmp_path):
+    results = [_result(0, event_index=0), _result(0, event_index=1)]
+    out, grp, meta = _save(results, tmp_path)
+
+    bus = pd.read_parquet(out / "bus_data.parquet")
+    key = ["scenario_index", "perturbation_index", "event_index"]
+    assert sorted(set(map(tuple, bus[key].to_numpy()))) == [(0, 0, 0), (0, 0, 1)]
+    assert np.asarray(grp["event_index"]).tolist() == [0, 1]
+    assert meta["static_event_index"] == [0, 1]
+    assert meta["dynamic_event_index"] == [0, 1]
+    assert meta["reports"] == [
+        "scenario_0_perturbation_0_event_0.json",
+        "scenario_0_perturbation_0_event_1.json",
+    ]
 
 
 def test_features_and_labels_joinable_when_membership_differs(tmp_path):
@@ -267,6 +291,7 @@ def test_final_state_values_are_exported_as_a_keyed_table(tmp_path):
     assert list(frame.columns) == [
         "scenario_index",
         "perturbation_index",
+        "event_index",
         "gen_UPu",
         "gen_efd",
     ]
