@@ -52,6 +52,24 @@ configuration and output reference.
 
 ::: gridfm_datakit.dynamic.placement.PlacementError
 
+## Event perturbation
+
+### `EventPerturbation`
+
+::: gridfm_datakit.dynamic.event_perturbation.EventPerturbation
+
+### `parse_event_perturbation`
+
+::: gridfm_datakit.dynamic.event_perturbation.parse_event_perturbation
+
+### `check_event_perturbation`
+
+::: gridfm_datakit.dynamic.event_perturbation.check_event_perturbation
+
+### `draw_events`
+
+::: gridfm_datakit.dynamic.event_perturbation.draw_events
+
 ## Dynawo backend
 
 ### `DynawoMappings`
