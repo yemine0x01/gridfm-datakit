@@ -76,12 +76,16 @@ def test_final_state_values_reach_the_output(config_ieee14):
     path = Path(file_paths["final_state_values"])
     assert path.is_file()
     frame = pd.read_parquet(path)
-    assert list(frame.columns[:2]) == ["scenario_index", "perturbation_index"]
+    assert list(frame.columns[:3]) == [
+        "scenario_index",
+        "perturbation_index",
+        "event_index",
+    ]
 
     metadata = json.loads(Path(file_paths["metadata"]).read_text())
     names = metadata["final_state_value_names"]
     assert names, "the run monitors a FinalStateValue row, so names must be recorded"
-    assert list(frame.columns[2:]) == names
+    assert list(frame.columns[3:]) == names
     assert len(frame) == metadata["n_samples"]
     assert frame[names].notna().all().all()
 
@@ -101,7 +105,8 @@ def test_several_final_state_values_each_get_a_column(config_ieee14_multi_fsv):
     names = metadata["final_state_value_names"]
 
     assert len(names) == 3, names
-    assert list(frame.columns) == ["scenario_index", "perturbation_index"] + names
+    key = ["scenario_index", "perturbation_index", "event_index"]
+    assert list(frame.columns) == key + names
     assert frame[names].notna().all().all()
     # distinct models, so not one number repeated
     assert frame[names].iloc[0].nunique() > 1
@@ -109,6 +114,24 @@ def test_several_final_state_values_each_get_a_column(config_ieee14_multi_fsv):
     # each column names the model it came from
     for model_id in ("_GEN____1_SM", "_GEN____3_SM", "_GEN____6_SM"):
         assert any(model_id in name for name in names), (model_id, names)
+
+
+@needs_dynawo
+def test_events_are_recorded_for_every_sample(config_ieee14):
+    import pandas as pd
+
+    events = pd.read_csv(config_ieee14.dynamic.input_files.events_file)
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+
+    key = ["scenario_index", "perturbation_index", "event_index"]
+    recorded = pd.read_parquet(file_paths["events"])
+    bus = pd.read_parquet(file_paths["bus_data"])
+    assert len(recorded) == metadata["n_samples"] * len(events)
+    assert set(map(tuple, recorded[key].to_numpy())) == set(
+        map(tuple, bus[key].to_numpy()),
+    )
 
 
 @needs_dynawo

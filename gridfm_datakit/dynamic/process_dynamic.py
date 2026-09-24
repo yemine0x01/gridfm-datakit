@@ -99,7 +99,8 @@ def iter_dynamic_simulations(
     list of dict
         One list per large chunk, holding one dict per successfully processed
         (scenario, topology-perturbation) sample, each with keys ``"pf_data"``,
-        ``"dynamic_results"``, ``"scenario_index"``, ``"perturbation_index"``.
+        ``"dynamic_results"``, ``"scenario_index"``, ``"perturbation_index"``,
+        ``"event_index"``, ``"events"``.
         A chunk whose scenarios all failed yields an empty list.
     """
     n_scenarios = config.load.scenarios
@@ -362,13 +363,15 @@ def process_single_dynamic_simulation(
     the balanced initial state is computed on the perturbed network (so OPF adapts
     the set-points to the topology and Dynawo initialises from a converged
     operating point), then the dynamic simulation is run. One sample is produced
-    per ``(scenario_index, perturbation_index)``.
+    per ``(scenario_index, perturbation_index, event_index)``; ``event_index`` is
+    0 for now.
 
     Absent generators default to identity, so a scenario yields exactly one
     sample, the pre-perturbation behaviour.
 
     Each simulation builds its event mapping from ``events``, which replaces the
-    event mapping in ``dynamic_mappings``.
+    event mapping in ``dynamic_mappings``. Each sample carries the ``events`` it
+    simulated.
 
     Returns a list of result dicts (possibly empty if every perturbation failed).
     """
@@ -441,6 +444,8 @@ def process_single_dynamic_simulation(
             combined = _combine_pf_and_dyn_res(pf_data, dyn_results)
             combined["scenario_index"] = scenario_index
             combined["perturbation_index"] = perturbation_index
+            combined["event_index"] = 0
+            combined["events"] = events
             results.append(combined)
         except Exception as e:
             # A single perturbation failing must not drop the whole scenario.
@@ -534,7 +539,8 @@ def _combine_pf_and_dyn_res(
 
     The two have different granularity, per element vs per monitored variable,
     so they are packaged side by side and written to separate stores, joined by
-    the (scenario_index, perturbation_index) key the writer adds to both.
+    the (scenario_index, perturbation_index, event_index) key the writer adds to
+    both.
 
     Args
     ----
