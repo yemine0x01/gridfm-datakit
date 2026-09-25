@@ -71,6 +71,13 @@ dynamic:
   #       events:                  # exactly one for now
   #         - type: Disconnect
   #           target: {element: generator, distance: [0, 2]}
+  #   A node fault instead, still one event per scenario for now:
+  #         - type: NodeFault
+  #           target: {element: bus, distance: [0, 1]}
+  #           params:
+  #             fault_time: 0.1
+  #             r_pu: 0
+  #             x_pu: {distribution: uniform, low: 0.01, high: 0.1}
   # Optional. Governs the AC power flow that produces the balanced initial state.
   # The defaults below are applied when this block is absent; they differ from the
   # static pipeline's on purpose. Dynawo initialises each synchronous machine from

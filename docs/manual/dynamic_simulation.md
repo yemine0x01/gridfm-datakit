@@ -368,9 +368,29 @@ dynamic:
 | `scenarios[].anchor` | `random` | The bus targets are placed around: a bus ID of the network file, or `random` for one drawn per event variant |
 | `scenarios[].start_time` | required | Event time in seconds, a value spec, positive |
 | `scenarios[].events` | required | Exactly one entry for now |
-| `events[].type` | required | `Disconnect`, the whole element |
-| `events[].target.element` | required | `bus`, `generator`, `load`, `line` or `transformer` |
+| `events[].type` | required | `Disconnect` (the whole element), `NodeFault`, `ActivePowerVariation`, `ReactivePowerVariation` or `ReferenceVoltageVariation` |
+| `events[].target.element` | required | `bus`, `generator`, `load`, `line` or `transformer`, narrowed by the type below |
 | `events[].target.distance` | required | Hops from the anchor, an integer or an inclusive `[min, max]` |
+| `events[].params` | | Every param of the type, each a value spec. Required for every type but `Disconnect`, which takes none |
+
+| `type` | `target.element` | `params` |
+| --- | --- | --- |
+| `NodeFault` | `bus` | `fault_time` positive, `r_pu` and `x_pu` non-negative |
+| `ActivePowerVariation` | `generator`, `load` | `delta_p`, any sign |
+| `ReactivePowerVariation` | `generator`, `load` | `delta_q`, any sign |
+| `ReferenceVoltageVariation` | `generator` | `delta_u`, any sign |
+
+A node fault on a bus drawn at `distance` 0 or 1 hop from a random anchor:
+
+```yaml
+        events:
+          - type: NodeFault
+            target: {element: bus, distance: [0, 1]}
+            params:
+              fault_time: {distribution: normal, mean: 0.1, std: 0.02, min: 0.05, max: 0.2}
+              r_pu: 0
+              x_pu: {distribution: uniform, low: 0.01, high: 0.1}
+```
 
 Every level rejects unknown keys and names their path, for example
 `dynamic.event_perturbation.scenarios[0].weight`.
@@ -393,7 +413,9 @@ anchor is checked against the network file before any simulation.
 
 Every value `start_time` can take must lie inside the `[start_time, stop_time]`
 window of `dynamic.solver_parameters`, checked when the config is loaded. For a
-normal that range is `mean ± 6 std`, cut by `min` and `max`.
+normal that range is `mean ± 6 std`, cut by `min` and `max`. A `NodeFault` must
+also end by `stop_time`: the largest `start_time` plus the largest `fault_time`
+may not exceed it. The other types are instantaneous.
 
 Each event variant draws from
 `numpy.random.default_rng([settings.seed, scenario_index, perturbation_index,
@@ -793,7 +815,13 @@ reports neither:
   and so are the events unless `event_perturbation` draws them. What varies is
   the operating point, the branch impedances (with `admittance_perturbation`)
   and the topology (with `topology_perturbation`).
-- Random events are `Disconnect` only, one scenario of one event.
+- Random events are one scenario of one event.
+- Dynawo ignores a power or voltage variation when the target's dynamic model
+  does not take it: the run succeeds and the event is recorded, but the curves
+  do not change. On the IEEE14 example this is `ActivePowerVariation` and
+  `ReactivePowerVariation` on `_LOAD___6_EC` and `_LOAD___9_EC`, the loads
+  modelled as `LoadOneTransformerTapChanger`, `ReactivePowerVariation` on every
+  synchronous generator, and `ReferenceVoltageVariation` on `_GEN____3_SM`.
 - `events_file` times are not checked against the simulation window.
 - `generation_perturbation` does not work: the powsybl reader supplies no real
   generator costs for it to perturb.
