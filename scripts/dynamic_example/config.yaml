@@ -64,16 +64,17 @@ dynamic:
   # event_perturbation:
   #   type: random                 # none | file | random
   #   n_event_variants: 3          # event variants per topology variant
-  #   scenarios:                   # exactly one for now
-  #     - name: generator_trip
+  #   scenarios:                   # one drawn per event variant, by weight
+  #     - name: trip_then_fault
   #       anchor: random           # or a bus ID of the network file
+  #       weight: 1
   #       start_time: {distribution: uniform, low: 20, high: 80}
-  #       events:                  # exactly one for now
+  #       events:
   #         - type: Disconnect
   #           target: {element: generator, distance: [0, 2]}
-  #   A node fault instead, still one event per scenario for now:
   #         - type: NodeFault
   #           target: {element: bus, distance: [0, 1]}
+  #           delay: {distribution: uniform, low: 0.1, high: 0.3}
   #           params:
   #             fault_time: 0.1
   #             r_pu: 0

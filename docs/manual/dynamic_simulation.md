@@ -345,13 +345,29 @@ dynamic:
     type: random
     n_event_variants: 3
     scenarios:
-      - name: generator_trip
+      - name: trip_then_fault
         anchor: random
+        weight: 3
         start_time: {distribution: uniform, low: 20, high: 80}
         events:
           - type: Disconnect
             target: {element: generator, distance: [0, 2]}
+          - type: NodeFault
+            target: {element: bus, distance: [0, 1]}
+            delay: {distribution: uniform, low: 0.1, high: 0.3}
+            params: {fault_time: 0.1, r_pu: 0, x_pu: 0.05}
+      - name: load_step
+        weight: 1
+        start_time: {distribution: uniform, low: 20, high: 80}
+        events:
+          - type: ActivePowerVariation
+            target: {element: load, distance: 0}
+            params: {delta_p: {distribution: uniform, low: -0.2, high: 0.2}}
 ```
+
+Each event variant draws `trip_then_fault` three times out of four: a generator
+trip, then a fault 0.1 to 0.3 s later on a bus next to the anchor. Otherwise it
+draws a load step.
 
 | `type` | Events of every sample |
 | --- | --- |
@@ -363,15 +379,17 @@ dynamic:
 | --- | --- | --- |
 | `type` | required | `none`, `file` or `random` |
 | `n_event_variants` | `1` | Event variants per topology variant; must be 1 unless `random` |
-| `scenarios` | | `random` only, exactly one entry for now |
-| `scenarios[].name` | required | Named in `raw/error.log` |
+| `scenarios` | | `random` only, one or more entries, one drawn per event variant by `weight` |
+| `scenarios[].name` | required | Unique, recorded in the `scenario` column of `events.parquet` and named in `raw/error.log` |
+| `scenarios[].weight` | `1` | Relative chance of drawing the scenario, a positive number |
 | `scenarios[].anchor` | `random` | The bus targets are placed around: a bus ID of the network file, or `random` for one drawn per event variant |
 | `scenarios[].start_time` | required | Event time in seconds, a value spec, positive |
-| `scenarios[].events` | required | Exactly one entry for now |
+| `scenarios[].events` | required | One or more entries, their targets distinct within the scenario |
 | `events[].type` | required | `Disconnect` (the whole element), `NodeFault`, `ActivePowerVariation`, `ReactivePowerVariation` or `ReferenceVoltageVariation` |
 | `events[].target.element` | required | `bus`, `generator`, `load`, `line` or `transformer`, narrowed by the type below |
 | `events[].target.distance` | required | Hops from the anchor, an integer or an inclusive `[min, max]` |
 | `events[].params` | | Every param of the type, each a value spec. Required for every type but `Disconnect`, which takes none |
+| `events[].delay` | `0` | Seconds after the scenario's `start_time`, a value spec, non-negative. The event time is `start_time + delay` |
 
 | `type` | `target.element` | `params` |
 | --- | --- | --- |
@@ -393,7 +411,7 @@ A node fault on a bus drawn at `distance` 0 or 1 hop from a random anchor:
 ```
 
 Every level rejects unknown keys and names their path, for example
-`dynamic.event_perturbation.scenarios[0].weight`.
+`dynamic.event_perturbation.scenarios[0].probability`.
 
 A value spec is a number, fixed, or one of:
 
@@ -413,14 +431,19 @@ anchor is checked against the network file before any simulation.
 
 Every value `start_time` can take must lie inside the `[start_time, stop_time]`
 window of `dynamic.solver_parameters`, checked when the config is loaded. For a
-normal that range is `mean ± 6 std`, cut by `min` and `max`. A `NodeFault` must
-also end by `stop_time`: the largest `start_time` plus the largest `fault_time`
-may not exceed it. The other types are instantaneous.
+normal that range is `mean ± 6 std`, cut by `min` and `max`. Each event must
+also fall by `stop_time`: the largest `start_time` plus the largest `delay` may
+not exceed it, and for a `NodeFault` neither may that sum plus the largest
+`fault_time`. The other types are instantaneous.
 
 Each event variant draws from
 `numpy.random.default_rng([settings.seed, scenario_index, perturbation_index,
 event_index])`, so a seed gives the same events whatever `num_processes` and
-`large_chunk_size`. The event variants of one topology variant share its OPF and
+`large_chunk_size`. The draws come in this order: the scenario by `weight`, only
+when there are several; its targets; its `start_time`; then per event in list
+order its `delay` and its `params`. A fixed value draws nothing, so adding
+`delay: 0` changes no draw. When the drawn scenario cannot be placed the sample
+fails; no other scenario is tried, which would bias the weights. The event variants of one topology variant share its OPF and
 power flow: their Parquet snapshot rows are identical except `event_index`.
 
 ### `dynamic.logging` and `dynamic.validate` (optional)
@@ -698,9 +721,10 @@ names dropped, missing ones become `NaN`).
 ### `events.parquet`
 
 One row per event per sample, keyed by `(scenario_index, perturbation_index,
-event_index)`, with the event columns `event_name`, `static_id`, `start_time` and
-`params`. It records the events each sample simulated, read from `events_file`
-or drawn. With `event_perturbation.type: none` no file is written.
+event_index)`, with the columns `scenario`, `event_name`, `static_id`,
+`start_time` and `params`. It records the events each sample simulated, read
+from `events_file` or drawn. `scenario` is the name of the drawn scenario, `""`
+for `events_file` rows. With `event_perturbation.type: none` no file is written.
 
 ### `reports/`
 
@@ -815,7 +839,8 @@ reports neither:
   and so are the events unless `event_perturbation` draws them. What varies is
   the operating point, the branch impedances (with `admittance_perturbation`)
   and the topology (with `topology_perturbation`).
-- Random events are one scenario of one event.
+- Event targets are drawn around an anchor bus; a fixed element cannot be
+  named.
 - Dynawo ignores a power or voltage variation when the target's dynamic model
   does not take it: the run succeeds and the event is recorded, but the curves
   do not change. On the IEEE14 example this is `ActivePowerVariation` and
