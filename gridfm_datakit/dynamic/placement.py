@@ -11,6 +11,8 @@ candidates.
 A random anchor is redrawn when a target cannot be placed, at most
 ``MAX_ANCHOR_ATTEMPTS`` times, so a scenario unplaceable from most buses fails
 the variant instead of spinning.
+
+``exclude``: IDs no target may take, the scenario's fixed targets.
 """
 
 from __future__ import annotations
@@ -121,12 +123,30 @@ class EventGraph:
                     queue.append(neighbour)
         return distance
 
+    def element_type(self, element_id: str) -> Optional[str]:
+        """Return the type of a candidate element.
+
+        Args:
+            element_id: The element ID.
+
+        Returns:
+            Optional[str]: The ``ELEMENT_TYPES`` entry whose candidates hold the
+            ID, ``None`` if none does.
+        """
+        for element in ELEMENT_TYPES:
+            if any(
+                candidate == element_id for candidate, _ in self.candidates[element]
+            ):
+                return element
+        return None
+
 
 def place_scenario(
     graph: EventGraph,
     anchor: Optional[str],
     targets: Sequence[Tuple[str, int, int]],
     rng: np.random.Generator,
+    exclude: Sequence[str] = (),
 ) -> Tuple[str, List[str]]:
     """Draw an anchor bus and one element per target.
 
@@ -135,6 +155,7 @@ def place_scenario(
         anchor: A bus ID, or ``None`` to draw one.
         targets: ``(element, low, high)`` per target, distances inclusive.
         rng: The generator every draw comes from.
+        exclude: Element IDs no target may take.
 
     Returns:
         Tuple[str, List[str]]: The anchor and the drawn element IDs, in target
@@ -157,7 +178,7 @@ def place_scenario(
             )
 
     if anchor is not None:
-        placed = _place_from(graph, graph.distances(anchor), targets, rng)
+        placed = _place_from(graph, graph.distances(anchor), targets, rng, exclude)
         if placed is None:
             raise PlacementError(
                 f"cannot place {list(targets)} from anchor {anchor!r}",
@@ -167,7 +188,7 @@ def place_scenario(
     buses = sorted(graph.adjacency)
     for _ in range(MAX_ANCHOR_ATTEMPTS):
         drawn = buses[rng.integers(len(buses))]
-        placed = _place_from(graph, graph.distances(drawn), targets, rng)
+        placed = _place_from(graph, graph.distances(drawn), targets, rng, exclude)
         if placed is not None:
             return drawn, placed
     raise PlacementError(
@@ -181,6 +202,7 @@ def _place_from(
     distance: Dict[str, int],
     targets: Sequence[Tuple[str, int, int]],
     rng: np.random.Generator,
+    exclude: Sequence[str],
 ) -> Optional[List[str]]:
     placed: List[str] = []
     for element, low, high in targets:
@@ -188,6 +210,7 @@ def _place_from(
             element_id
             for element_id, buses in graph.candidates[element]
             if element_id not in placed
+            and element_id not in exclude
             and _element_distance(distance, buses) in range(low, high + 1)
         ]
         if not allowed:
