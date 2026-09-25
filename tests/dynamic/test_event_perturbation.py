@@ -175,6 +175,16 @@ class TestParse:
         )
         assert event.params[0][1].support() == (-0.5, -0.5)
 
+    def test_a_second_scenario(self):
+        def edit(block):
+            second = copy.deepcopy(block["scenarios"][0])
+            second["name"] = "another_trip"
+            block["scenarios"].append(second)
+
+        scenarios = _parse(_edit(edit)).scenarios
+        assert [s.name for s in scenarios] == ["generator_trip", "another_trip"]
+        assert [s.weight for s in scenarios] == [1.0, 1.0]
+
     def test_a_second_event(self):
         delay = {"distribution": "uniform", "low": 0.1, "high": 0.3}
         scenario = _parse(_with_second_event({"delay": delay})).scenarios[0]
@@ -223,7 +233,10 @@ class TestReject:
         "edit, path",
         [
             (lambda b: b.update(seed=1), f"{PATH}.seed"),
-            (lambda b: b["scenarios"][0].update(weight=1), f"{SCENARIO}.weight"),
+            (
+                lambda b: b["scenarios"][0].update(probability=1),
+                f"{SCENARIO}.probability",
+            ),
             (
                 lambda b: b["scenarios"][0]["events"][0].update(offset=1),
                 f"{SCENARIO}.events[0].offset",
@@ -240,10 +253,20 @@ class TestReject:
         with pytest.raises(ValueError, match=f"^{re.escape(path)}: unknown key"):
             _parse(_edit(edit))
 
-    def test_a_second_scenario(self):
+    def test_no_scenario(self):
+        _raises(_random(scenarios=[]), f"{PATH}.scenarios")
+
+    @pytest.mark.parametrize("weight", [0, -1, True, "1"])
+    def test_invalid_weight(self, weight):
         _raises(
-            _edit(lambda b: b["scenarios"].append(b["scenarios"][0])),
-            f"{PATH}.scenarios",
+            _edit(lambda b: b["scenarios"][0].update(weight=weight)),
+            f"{SCENARIO}.weight",
+        )
+
+    def test_a_repeated_scenario_name(self):
+        _raises(
+            _edit(lambda b: b["scenarios"].append(copy.deepcopy(b["scenarios"][0]))),
+            f"{PATH}.scenarios[1].name",
         )
 
     def test_no_event(self):
@@ -518,6 +541,33 @@ class TestDrawEvents:
                 for perturbation in (_parse(_random()), delayed)
             ]
             pd.testing.assert_frame_equal(*frames)
+
+    def test_scenarios_are_drawn_by_weight(self):
+        graph = _chain_graph()
+        trip = _random()["scenarios"][0]
+        fault = _fault()["scenarios"][0]
+        perturbation = _parse(
+            _random(
+                scenarios=[
+                    {**trip, "name": "trip", "weight": 3},
+                    {**fault, "name": "fault", "weight": 1},
+                ],
+            ),
+        )
+        kind = {"trip": "Disconnect", "fault": "NodeFault"}
+
+        def draw(event_index):
+            rng = np.random.default_rng([1, 0, 0, event_index])
+            return draw_events(perturbation, graph, rng)
+
+        trips = 0
+        for event_index in range(2000):
+            frame = draw(event_index)
+            (name,) = frame["scenario"].unique()
+            assert (frame["event_name"] == kind[name]).all()
+            trips += name == "trip"
+            pd.testing.assert_frame_equal(frame, draw(event_index))
+        assert 0.7 <= trips / 2000 <= 0.8
 
     def test_no_scenario_draws_an_empty_frame(self):
         frame = draw_events(

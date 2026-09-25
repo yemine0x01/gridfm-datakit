@@ -3,9 +3,10 @@
 Form:
     type: none | file | random          required when the block is present
     n_event_variants: M                 positive int, default 1, 1 unless random
-    scenarios:                          random only, exactly one
-      - name: str
+    scenarios:                          random only, one or more
+      - name: str                       unique, recorded in events.parquet
         anchor: random | <bus ID>       default random
+        weight: float                   > 0, default 1
         start_time: <value spec>        inside the solver window
         events:                         one or more, targets distinct
           - type: <event type>
@@ -31,8 +32,10 @@ An absent block is ``type: file``, the ``events_file`` rows.
 
 Seeding: one ``default_rng([seed, scenario_index, perturbation_index,
 event_index])`` per event variant, so a draw does not depend on chunking or
-process count. Per scenario: placement, start time, then per event in list
-order its delay and its params in table order. A fixed spec draws nothing, so
+process count. Draw order: the scenario by weight, only when there are several;
+its placement; its start time; then per event in list order its delay and its
+params in table order. A placement failure raises: another scenario would bias
+the weights. A fixed spec draws nothing, so
 no delay and Disconnect cost no draw.
 
 The M event variants of a topology variant share its balanced state: it does not
@@ -127,12 +130,14 @@ class EventScenario:
         anchor: A bus ID, or ``None`` to draw one.
         start_time: The event time spec.
         events: The events of the scenario.
+        weight: The relative chance of drawing this scenario.
     """
 
     name: str
     anchor: Optional[str]
     start_time: ValueSpec
     events: Tuple[EventSpec, ...]
+    weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -142,7 +147,8 @@ class EventPerturbation:
     Args:
         type: ``none``, ``file`` or ``random``.
         n_event_variants: The event variants per topology variant.
-        scenarios: The scenarios drawn in ``random`` mode.
+        scenarios: The scenarios of ``random`` mode, one drawn per event
+            variant.
     """
 
     type: str = "file"
@@ -209,18 +215,22 @@ def parse_event_perturbation(
             "and stop_time to check event times",
         )
     scenarios = block.get("scenarios")
-    if not isinstance(scenarios, list) or len(scenarios) != 1:
+    if not isinstance(scenarios, list) or not scenarios:
         raise ValueError(
-            f"{_PATH}.scenarios: must be a list of exactly one scenario, "
+            f"{_PATH}.scenarios: must be a non-empty list of scenarios, "
             f"got {scenarios!r}",
         )
-    scenario = _parse_scenario(
-        scenarios[0],
-        f"{_PATH}.scenarios[0]",
-        float(start_time),
-        float(stop_time),
-    )
-    return EventPerturbation(kind, n_event_variants, (scenario,))
+    parsed = []
+    for index, entry in enumerate(scenarios):
+        path = f"{_PATH}.scenarios[{index}]"
+        scenario = _parse_scenario(entry, path, float(start_time), float(stop_time))
+        if any(scenario.name == other.name for other in parsed):
+            raise ValueError(
+                f"{path}.name: {scenario.name!r} is already the name of an "
+                "earlier scenario",
+            )
+        parsed.append(scenario)
+    return EventPerturbation(kind, n_event_variants, tuple(parsed))
 
 
 def check_event_perturbation(
@@ -277,10 +287,14 @@ def draw_events(
         pd.DataFrame: One row per event, columns ``EVENT_RECORD_COLUMNS``.
 
     Raises:
-        PlacementError: If a scenario cannot be placed.
+        PlacementError: If the drawn scenario cannot be placed.
     """
     rows = []
-    for scenario in perturbation.scenarios:
+    scenarios = perturbation.scenarios
+    if len(scenarios) > 1:
+        weights = np.array([scenario.weight for scenario in scenarios])
+        scenarios = (scenarios[rng.choice(len(scenarios), p=weights / weights.sum())],)
+    for scenario in scenarios:
         _, placed = place_scenario(graph, scenario.anchor, _targets(scenario), rng)
         start = float(scenario.start_time.sample(rng))
         for event, static_id in zip(scenario.events, placed):
@@ -318,7 +332,7 @@ def _parse_scenario(
     start_time: float,
     stop_time: float,
 ) -> EventScenario:
-    _check_keys(block, path, {"name", "start_time", "events"}, {"anchor"})
+    _check_keys(block, path, {"name", "start_time", "events"}, {"anchor", "weight"})
 
     name = block["name"]
     if not isinstance(name, str) or not name:
@@ -328,6 +342,17 @@ def _parse_scenario(
     if not isinstance(anchor, str) or not anchor:
         raise ValueError(
             f"{path}.anchor: must be 'random' or a bus ID, got {anchor!r}",
+        )
+
+    weight = block.get("weight", 1)
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, (int, float))
+        or not math.isfinite(weight)
+        or weight <= 0
+    ):
+        raise ValueError(
+            f"{path}.weight: must be a positive finite number, got {weight!r}",
         )
 
     spec = parse_value_spec(block["start_time"], f"{path}.start_time", POSITIVE)
@@ -366,6 +391,7 @@ def _parse_scenario(
         anchor=None if anchor == "random" else anchor,
         start_time=spec,
         events=tuple(parsed),
+        weight=float(weight),
     )
 
 
