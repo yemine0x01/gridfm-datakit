@@ -86,6 +86,31 @@ def _event(kind, element, params=None, start_time=None):
     return _edit(edit)
 
 
+def _with_second_event(extra):
+    def edit(block):
+        block["scenarios"][0]["events"].append(
+            {
+                "type": "NodeFault",
+                "target": {"element": "bus", "distance": [0, 2]},
+                "params": {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2},
+                **extra,
+            },
+        )
+
+    return _edit(edit)
+
+
+def _delayed_fault(delay):
+    block = _fault()
+    block["scenarios"][0]["start_time"] = {
+        "distribution": "uniform",
+        "low": 20,
+        "high": 99.5,
+    }
+    block["scenarios"][0]["events"][0]["delay"] = delay
+    return block
+
+
 def _fault(**params):
     return _event(
         "NodeFault",
@@ -150,6 +175,16 @@ class TestParse:
         )
         assert event.params[0][1].support() == (-0.5, -0.5)
 
+    def test_a_second_event(self):
+        delay = {"distribution": "uniform", "low": 0.1, "high": 0.3}
+        scenario = _parse(_with_second_event({"delay": delay})).scenarios[0]
+        first, second = scenario.events
+        assert first.delay.support() == (0.0, 0.0)
+        assert second.delay.support() == (0.1, 0.3)
+
+    def test_a_delayed_fault_ending_before_the_stop_time(self):
+        _parse(_delayed_fault(0.3))
+
     def test_a_fault_ending_before_the_stop_time(self):
         start = {"distribution": "uniform", "low": 20, "high": 99.8}
         _parse(
@@ -190,8 +225,8 @@ class TestReject:
             (lambda b: b.update(seed=1), f"{PATH}.seed"),
             (lambda b: b["scenarios"][0].update(weight=1), f"{SCENARIO}.weight"),
             (
-                lambda b: b["scenarios"][0]["events"][0].update(delay=1),
-                f"{SCENARIO}.events[0].delay",
+                lambda b: b["scenarios"][0]["events"][0].update(offset=1),
+                f"{SCENARIO}.events[0].offset",
             ),
             (
                 lambda b: b["scenarios"][0]["events"][0]["target"].update(
@@ -211,15 +246,25 @@ class TestReject:
             f"{PATH}.scenarios",
         )
 
-    def test_a_second_event(self):
+    def test_no_event(self):
         _raises(
-            _edit(
-                lambda b: b["scenarios"][0]["events"].append(
-                    b["scenarios"][0]["events"][0],
-                ),
-            ),
+            _edit(lambda b: b["scenarios"][0].update(events=[])),
             f"{SCENARIO}.events",
         )
+
+    def test_a_negative_delay(self):
+        _raises(
+            _edit(lambda b: b["scenarios"][0]["events"][0].update(delay=-0.1)),
+            f"{EVENT}.delay",
+        )
+
+    def test_a_delay_past_the_stop_time(self):
+        block = _with_second_event({"delay": 0.1})
+        block["scenarios"][0]["start_time"]["high"] = 99.95
+        _raises(block, f"{SCENARIO}.events[1].delay")
+
+    def test_a_delayed_fault_ending_after_the_stop_time(self):
+        _raises(_delayed_fault(0.45), f"{EVENT}.params.fault_time")
 
     def test_another_event_type(self):
         _raises(
@@ -436,6 +481,43 @@ class TestDrawEvents:
             np.random.default_rng([1, 0, 0, 0]),
         )
         assert frame["params"].iloc[0] == "delta_p=0.1"
+
+    def test_a_trip_then_a_delayed_fault(self):
+        graph = _chain_graph()
+        perturbation = _parse(
+            _with_second_event(
+                {"delay": {"distribution": "uniform", "low": 0.1, "high": 0.3}},
+            ),
+        )
+
+        def draw(event_index):
+            rng = np.random.default_rng([1, 0, 0, event_index])
+            return draw_events(perturbation, graph, rng)
+
+        for event_index in range(20):
+            frame = draw(event_index)
+            pd.testing.assert_frame_equal(frame, draw(event_index))
+            assert frame["event_name"].tolist() == ["Disconnect", "NodeFault"]
+            assert frame["static_id"].nunique() == 2
+            start, later = frame["start_time"]
+            assert 0.1 <= later - start < 0.3
+            assert 20 <= start < 80
+
+    def test_a_zero_delay_draws_as_no_delay(self):
+        graph = _chain_graph()
+        delayed = _parse(
+            _edit(lambda b: b["scenarios"][0]["events"][0].update(delay=0)),
+        )
+        for event_index in range(20):
+            frames = [
+                draw_events(
+                    perturbation,
+                    graph,
+                    np.random.default_rng([1, 0, 0, event_index]),
+                )
+                for perturbation in (_parse(_random()), delayed)
+            ]
+            pd.testing.assert_frame_equal(*frames)
 
     def test_no_scenario_draws_an_empty_frame(self):
         frame = draw_events(
