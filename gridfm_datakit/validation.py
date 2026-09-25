@@ -8,6 +8,7 @@ to provide comprehensive validation of generated power flow data.
 import pandas as pd
 import numpy as np
 import os
+import pyarrow.parquet as pq
 from typing import Dict, Iterable
 from gridfm_datakit.utils.power_balance import compute_branch_admittances
 from gridfm_datakit.utils.column_names import (
@@ -338,6 +339,9 @@ def validate_dynamic_data(
     starts from): the bus/branch/gen/Y-bus/runtime tables. It does not validate the
     time-series curves in the Zarr store.
 
+    A table without ``event_index``, as written by release 1.1.0 and earlier, is
+    read as ``event_index`` 0.
+
     Args:
         file_paths: Paths as returned by generate_dynamic_data (needs "bus_data",
             "branch_data", "gen_data", "y_bus_data", optionally "runtime_data").
@@ -353,8 +357,15 @@ def validate_dynamic_data(
     """
     KEY = ["scenario_index", "perturbation_index", "event_index"]
 
+    def _with_event_index(df: pd.DataFrame) -> pd.DataFrame:
+        if "event_index" in df.columns:
+            return df
+        df = df.copy()
+        df.insert(df.columns.get_loc("perturbation_index") + 1, "event_index", 0)
+        return df
+
     def _read(key: str) -> pd.DataFrame:
-        df = pd.read_parquet(file_paths[key], engine="pyarrow")
+        df = _with_event_index(pd.read_parquet(file_paths[key], engine="pyarrow"))
         # One dense "scenario" per distinct sample, consistent across every table:
         # the checks assume a single integer key and compare its set across files.
         df.insert(0, "scenario", df.set_index(KEY).index.map(sample_ids))
@@ -362,7 +373,14 @@ def validate_dynamic_data(
 
     # Build the sample -> dense id map once, from the bus table (every table carries
     # the same set of samples), so the id is stable across all five files.
-    bus_keys = pd.read_parquet(file_paths["bus_data"], columns=KEY, engine="pyarrow")
+    bus_path = file_paths["bus_data"]
+    bus_keys = _with_event_index(
+        pd.read_parquet(
+            bus_path,
+            columns=[c for c in KEY if c in pq.read_schema(bus_path).names],
+            engine="pyarrow",
+        ),
+    )
     unique_keys = bus_keys.drop_duplicates().sort_values(KEY)
     sample_ids = {
         (int(s), int(p), int(e)): i
