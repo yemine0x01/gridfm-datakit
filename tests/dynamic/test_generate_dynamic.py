@@ -165,6 +165,7 @@ def test_random_events_are_drawn_per_event_variant(config_ieee14):
 
     events = pd.read_parquet(file_paths["events"])
     assert events["event_index"].tolist() == [0, 1, 2]
+    assert (events["scenario"] == "generator_trip").all()
     generators = set(pn.load(config_ieee14.network.file).get_generators().index)
     assert set(events["static_id"]) <= generators
     assert len(set(zip(events["static_id"], events["start_time"]))) == 3

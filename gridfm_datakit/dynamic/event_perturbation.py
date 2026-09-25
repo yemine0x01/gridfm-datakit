@@ -62,6 +62,7 @@ from gridfm_datakit.utils.value_spec import (
 )
 
 EVENT_COLUMNS = ["event_name", "static_id", "start_time", "params"]
+EVENT_RECORD_COLUMNS = ["scenario"] + EVENT_COLUMNS
 
 _PATH = "dynamic.event_perturbation"
 _TYPES = ("none", "file", "random")
@@ -114,7 +115,8 @@ class EventScenario:
     """A set of events drawn around one anchor bus.
 
     Args:
-        name: The scenario name, used in error messages.
+        name: The scenario name, used in error messages and recorded with every
+            drawn event.
         anchor: A bus ID, or ``None`` to draw one.
         start_time: The event time spec.
         events: The events of the scenario.
@@ -265,7 +267,7 @@ def draw_events(
         rng: The generator of the event variant.
 
     Returns:
-        pd.DataFrame: One row per event, columns ``EVENT_COLUMNS``.
+        pd.DataFrame: One row per event, columns ``EVENT_RECORD_COLUMNS``.
 
     Raises:
         PlacementError: If a scenario cannot be placed.
@@ -275,8 +277,18 @@ def draw_events(
         _, placed = place_scenario(graph, scenario.anchor, _targets(scenario), rng)
         start = float(scenario.start_time.sample(rng))
         for event, static_id in zip(scenario.events, placed):
-            rows.append((event.type, static_id, start, _draw_params(event, rng)))
-    return pd.DataFrame(rows, columns=EVENT_COLUMNS).astype({"start_time": float})
+            rows.append(
+                (
+                    scenario.name,
+                    event.type,
+                    static_id,
+                    start,
+                    _draw_params(event, rng),
+                ),
+            )
+    return pd.DataFrame(rows, columns=EVENT_RECORD_COLUMNS).astype(
+        {"start_time": float},
+    )
 
 
 def _draw_params(event: EventSpec, rng: np.random.Generator) -> str:
@@ -408,6 +420,7 @@ def _check_keys(block: Any, path: str, required: set, optional: set) -> None:
 
 __all__ = [
     "EVENT_COLUMNS",
+    "EVENT_RECORD_COLUMNS",
     "EventTarget",
     "EventSpec",
     "EventScenario",

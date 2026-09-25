@@ -12,7 +12,7 @@ from markers import needs_powsybl
 
 from gridfm_datakit.dynamic.dynawo.utils import EVENT_PARAMS_MAPPING
 from gridfm_datakit.dynamic.event_perturbation import (
-    EVENT_COLUMNS,
+    EVENT_RECORD_COLUMNS,
     EventPerturbation,
     EventTarget,
     check_event_perturbation,
@@ -362,9 +362,10 @@ class TestDrawEvents:
         graph = _chain_graph()
         perturbation = _parse(_random())
         frame = draw_events(perturbation, graph, np.random.default_rng([1, 0, 0, 0]))
-        assert list(frame.columns) == EVENT_COLUMNS
+        assert list(frame.columns) == EVENT_RECORD_COLUMNS
         assert len(frame) == 1
         row = frame.iloc[0]
+        assert row["scenario"] == "generator_trip"
         assert row["event_name"] == "Disconnect"
         assert row["params"] == "disconnect_only=;"
         assert frame["start_time"].dtype == float
@@ -442,7 +443,7 @@ class TestDrawEvents:
             _chain_graph(),
             np.random.default_rng(0),
         )
-        assert frame.empty and list(frame.columns) == EVENT_COLUMNS
+        assert frame.empty and list(frame.columns) == EVENT_RECORD_COLUMNS
 
 
 @needs_powsybl
