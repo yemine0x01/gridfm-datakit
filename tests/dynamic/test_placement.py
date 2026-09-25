@@ -100,6 +100,30 @@ def test_targets_of_one_scenario_are_distinct(graph):
         assert first != second
 
 
+def test_excluded_elements_are_never_placed(graph):
+    excluded = "_GEN____1_SM"
+    targets = [("generator", 0, 1)]
+    for seed in SEEDS:
+        rng = np.random.default_rng(seed)
+        _, (drawn,) = place_scenario(graph, BUS2, targets, rng, exclude=[excluded])
+        assert drawn != excluded
+        rng = np.random.default_rng(seed)
+        unexcluded = place_scenario(graph, BUS2, targets, rng, exclude=())
+        assert unexcluded == _draw(graph, BUS2, targets, seed)
+
+
+def test_element_type_of_an_id(graph, network):
+    assert graph.element_type("_GEN____2_SM") == "generator"
+    assert graph.element_type(BUS2) == "bus"
+    assert graph.element_type("_BUS____1-BUS____2-1_AC") == "line"
+    assert graph.element_type("_GEN___99_SM") is None
+
+    network.clone_variant("InitialState", "perturbed")
+    network.set_working_variant("perturbed")
+    network.update_generators(id="_GEN____3_SM", connected=False)
+    assert EventGraph.from_network(network).element_type("_GEN____3_SM") is None
+
+
 def test_random_anchor_is_reproducible_and_respects_distances(graph, network):
     targets = [("generator", 1, 2), ("load", 0, 1)]
     assert _draw(graph, None, targets, 7) == _draw(graph, None, targets, 7)

@@ -5,12 +5,13 @@ Form:
     n_event_variants: M                 positive int, default 1, 1 unless random
     scenarios:                          random only, one or more
       - name: str                       unique, recorded in events.parquet
-        anchor: random | <bus ID>       default random
+        anchor: random | <bus ID>       default random, places distance targets
         weight: float                   > 0, default 1
         start_time: <value spec>        inside the solver window
         events:                         one or more, targets distinct
           - type: <event type>
             target: {element: <element>, distance: int | [min, max]}
+                  | {static_id: <network file ID>}
             params: {<param>: <value spec>}   every param, none for Disconnect
             delay: <value spec>         >= 0, default 0, time start_time + delay
 
@@ -24,6 +25,11 @@ Event types, allowed elements, params and floors (``_EVENTS``):
 ``_EVENTS`` copies the keys of ``dynawo.utils.EVENT_PARAMS_MAPPING``: importing
 it here is circular. A test keeps them in sync.
 
+Fixed target: checked on the base network at config load, an in-service element
+of a type the event accepts. Out of service in a topology variant, it fails that
+variant. Distance targets of its scenario never pick it. It draws nothing, and a
+scenario of fixed targets only draws no anchor.
+
 Window, per event: ``start_time + delay``, plus ``fault_time`` for a NodeFault,
 must not exceed the stop time, checked on the largest value each spec can take.
 The other types are instantaneous.
@@ -33,10 +39,10 @@ An absent block is ``type: file``, the ``events_file`` rows.
 Seeding: one ``default_rng([seed, scenario_index, perturbation_index,
 event_index])`` per event variant, so a draw does not depend on chunking or
 process count. Draw order: the scenario by weight, only when there are several;
-its placement; its start time; then per event in list order its delay and its
-params in table order. A placement failure raises: another scenario would bias
-the weights. A fixed spec draws nothing, so
-no delay and Disconnect cost no draw.
+the placement of its distance targets; its start time; then per event in list
+order its delay and its params in table order. A placement failure raises:
+another scenario would bias the weights. A fixed spec draws nothing, so no delay
+and Disconnect cost no draw.
 
 The M event variants of a topology variant share its balanced state: it does not
 depend on the events, so it is computed once. A Dynawo run writes its final state
@@ -47,7 +53,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -104,18 +110,30 @@ class EventTarget:
 
 
 @dataclass(frozen=True)
+class FixedTarget:
+    """A named element an event applies to.
+
+    Args:
+        static_id: The element ID in the network file.
+    """
+
+    static_id: str
+
+
+@dataclass(frozen=True)
 class EventSpec:
     """One event of a scenario.
 
     Args:
         type: The Dynawo event name.
-        target: Where the event applies.
+        target: Where the event applies: an ``EventTarget`` drawn by distance
+            from the anchor, or a ``FixedTarget``.
         params: The ``(param, spec)`` pairs of the type, in ``_EVENTS`` order.
         delay: The time after the scenario's start time.
     """
 
     type: str
-    target: EventTarget
+    target: Union[EventTarget, FixedTarget]
     params: Tuple[Tuple[str, ValueSpec], ...] = ()
     delay: ValueSpec = _NO_DELAY
 
@@ -237,33 +255,57 @@ def check_event_perturbation(
     perturbation: EventPerturbation,
     network_path: str,
 ) -> None:
-    """Check that every fixed anchor can place its scenario on the base network.
+    """Check fixed anchors and fixed targets against the base network.
 
     Args:
         perturbation: The parsed block.
         network_path: The network file.
 
     Raises:
-        ValueError: If a fixed anchor is not a bus of the network or cannot place
-            its targets. The message starts with the anchor's config path.
+        ValueError: If a fixed target is not an in-service element of a type its
+            event accepts, or a fixed anchor is not a bus of the network or
+            cannot place its distance targets. The message starts with the
+            config path of the target or the anchor.
     """
-    fixed = [
+    anchors = [
         (index, scenario)
         for index, scenario in enumerate(perturbation.scenarios)
         if scenario.anchor is not None
     ]
-    if not fixed:
+    targets = [
+        (index, position, event)
+        for index, scenario in enumerate(perturbation.scenarios)
+        for position, event in enumerate(scenario.events)
+        if isinstance(event.target, FixedTarget)
+    ]
+    if not anchors and not targets:
         return
     from gridfm_datakit.powsybl import load_net
 
     graph = EventGraph.from_network(load_net(network_path).pp_net)
-    for index, scenario in fixed:
+    for index, position, event in targets:
+        path = f"{_PATH}.scenarios[{index}].events[{position}].target.static_id"
+        static_id = event.target.static_id
+        element = graph.element_type(static_id)
+        if element is None:
+            raise ValueError(
+                f"{path}: {static_id!r} is not an in-service bus, generator, load, "
+                "line or transformer of the network",
+            )
+        elements = _EVENTS[event.type][0]
+        if element not in elements:
+            raise ValueError(
+                f"{path}: {event.type} accepts {list(elements)}, "
+                f"{static_id!r} is a {element}",
+            )
+    for index, scenario in anchors:
         try:
             place_scenario(
                 graph,
                 scenario.anchor,
                 _targets(scenario),
                 np.random.default_rng(0),
+                exclude=_fixed_ids(scenario),
             )
         except (ValueError, PlacementError) as error:
             raise ValueError(
@@ -287,7 +329,8 @@ def draw_events(
         pd.DataFrame: One row per event, columns ``EVENT_RECORD_COLUMNS``.
 
     Raises:
-        PlacementError: If the drawn scenario cannot be placed.
+        PlacementError: If the drawn scenario cannot be placed, or one of its
+            fixed targets is out of service in this variant.
     """
     rows = []
     scenarios = perturbation.scenarios
@@ -295,9 +338,9 @@ def draw_events(
         weights = np.array([scenario.weight for scenario in scenarios])
         scenarios = (scenarios[rng.choice(len(scenarios), p=weights / weights.sum())],)
     for scenario in scenarios:
-        _, placed = place_scenario(graph, scenario.anchor, _targets(scenario), rng)
+        static_ids = _place_events(scenario, graph, rng)
         start = float(scenario.start_time.sample(rng))
-        for event, static_id in zip(scenario.events, placed):
+        for event, static_id in zip(scenario.events, static_ids):
             delay = float(event.delay.sample(rng))
             rows.append(
                 (
@@ -319,10 +362,46 @@ def _draw_params(event: EventSpec, rng: np.random.Generator) -> str:
     return ";".join(f"{key}={float(spec.sample(rng))!r}" for key, spec in event.params)
 
 
+def _place_events(
+    scenario: EventScenario,
+    graph: EventGraph,
+    rng: np.random.Generator,
+) -> List[str]:
+    fixed = _fixed_ids(scenario)
+    for static_id in fixed:
+        if graph.element_type(static_id) is None:
+            raise PlacementError(
+                f"fixed target {static_id!r} is out of service in this variant",
+            )
+    targets = _targets(scenario)
+    placed = iter(
+        place_scenario(graph, scenario.anchor, targets, rng, exclude=fixed)[1]
+        if targets
+        else [],
+    )
+    return [
+        (
+            event.target.static_id
+            if isinstance(event.target, FixedTarget)
+            else next(placed)
+        )
+        for event in scenario.events
+    ]
+
+
 def _targets(scenario: EventScenario) -> list:
     return [
         (event.target.element, event.target.low, event.target.high)
         for event in scenario.events
+        if isinstance(event.target, EventTarget)
+    ]
+
+
+def _fixed_ids(scenario: EventScenario) -> List[str]:
+    return [
+        event.target.static_id
+        for event in scenario.events
+        if isinstance(event.target, FixedTarget)
     ]
 
 
@@ -372,6 +451,14 @@ def _parse_scenario(
     for index, entry in enumerate(events):
         event_path = f"{path}.events[{index}]"
         event = _parse_event(entry, event_path)
+        target = event.target
+        if isinstance(target, FixedTarget) and any(
+            target == other.target for other in parsed
+        ):
+            raise ValueError(
+                f"{event_path}.target.static_id: {event.target.static_id!r} is "
+                "already the target of an earlier event",
+            )
         end = high + event.delay.support()[1]
         if end > stop_time:
             raise ValueError(
@@ -402,7 +489,7 @@ def _parse_event(block: Any, path: str) -> EventSpec:
         raise ValueError(f"{path}.type: must be one of {list(_EVENTS)}, got {kind!r}")
     target = _parse_target(block["target"], f"{path}.target")
     elements, floors = _EVENTS[kind]
-    if target.element not in elements:
+    if isinstance(target, EventTarget) and target.element not in elements:
         raise ValueError(
             f"{path}.target.element: {kind} accepts {list(elements)}, "
             f"got {target.element!r}",
@@ -432,7 +519,15 @@ def _parse_event(block: Any, path: str) -> EventSpec:
     )
 
 
-def _parse_target(block: Any, path: str) -> EventTarget:
+def _parse_target(block: Any, path: str) -> Union[EventTarget, FixedTarget]:
+    if isinstance(block, Mapping) and "static_id" in block:
+        _check_keys(block, path, {"static_id"}, set())
+        static_id = block["static_id"]
+        if not isinstance(static_id, str) or not static_id:
+            raise ValueError(
+                f"{path}.static_id: must be a non-empty string, got {static_id!r}",
+            )
+        return FixedTarget(static_id)
     _check_keys(block, path, {"element", "distance"}, set())
     element = block["element"]
     if element not in ELEMENT_TYPES:
@@ -472,6 +567,7 @@ __all__ = [
     "EVENT_COLUMNS",
     "EVENT_RECORD_COLUMNS",
     "EventTarget",
+    "FixedTarget",
     "EventSpec",
     "EventScenario",
     "EventPerturbation",

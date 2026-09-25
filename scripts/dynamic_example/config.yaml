@@ -71,7 +71,7 @@ dynamic:
   #       start_time: {distribution: uniform, low: 20, high: 80}
   #       events:
   #         - type: Disconnect
-  #           target: {element: generator, distance: [0, 2]}
+  #           target: {element: generator, distance: [0, 2]}  # or {static_id: _GEN____2_SM}
   #         - type: NodeFault
   #           target: {element: bus, distance: [0, 1]}
   #           delay: {distribution: uniform, low: 0.1, high: 0.3}

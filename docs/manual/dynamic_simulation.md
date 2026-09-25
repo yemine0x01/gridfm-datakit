@@ -382,12 +382,13 @@ draws a load step.
 | `scenarios` | | `random` only, one or more entries, one drawn per event variant by `weight` |
 | `scenarios[].name` | required | Unique, recorded in the `scenario` column of `events.parquet` and named in `raw/error.log` |
 | `scenarios[].weight` | `1` | Relative chance of drawing the scenario, a positive number |
-| `scenarios[].anchor` | `random` | The bus targets are placed around: a bus ID of the network file, or `random` for one drawn per event variant |
+| `scenarios[].anchor` | `random` | The bus distance targets are placed around: a bus ID of the network file, or `random` for one drawn per event variant |
 | `scenarios[].start_time` | required | Event time in seconds, a value spec, positive |
 | `scenarios[].events` | required | One or more entries, their targets distinct within the scenario |
 | `events[].type` | required | `Disconnect` (the whole element), `NodeFault`, `ActivePowerVariation`, `ReactivePowerVariation` or `ReferenceVoltageVariation` |
-| `events[].target.element` | required | `bus`, `generator`, `load`, `line` or `transformer`, narrowed by the type below |
-| `events[].target.distance` | required | Hops from the anchor, an integer or an inclusive `[min, max]` |
+| `events[].target.element` | required unless `static_id` | `bus`, `generator`, `load`, `line` or `transformer`, narrowed by the type below |
+| `events[].target.distance` | required unless `static_id` | Hops from the anchor, an integer or an inclusive `[min, max]` |
+| `events[].target.static_id` | | In place of `element` and `distance`, the ID of a bus, generator, load, line or transformer in service in the network file, checked before any simulation. A sample whose topology variant took it out of service fails. The distance targets of the scenario never pick it |
 | `events[].params` | | Every param of the type, each a value spec. Required for every type but `Disconnect`, which takes none |
 | `events[].delay` | `0` | Seconds after the scenario's `start_time`, a value spec, non-negative. The event time is `start_time + delay` |
 
@@ -427,7 +428,9 @@ Values outside the bounds are redrawn, never clipped.
 transformers in service after the topology perturbation. A generator or load
 sits at its bus's distance, a branch at its nearer end's. A random anchor is
 redrawn, up to 100 times, when a target cannot be placed around it. A fixed
-anchor is checked against the network file before any simulation.
+anchor is checked against the network file before any simulation, and so is
+every `static_id`: it must be in service and of an element type its event
+accepts.
 
 Every value `start_time` can take must lie inside the `[start_time, stop_time]`
 window of `dynamic.solver_parameters`, checked when the config is loaded. For a
@@ -442,9 +445,10 @@ event_index])`, so a seed gives the same events whatever `num_processes` and
 `large_chunk_size`. The draws come in this order: the scenario by `weight`, only
 when there are several; its targets; its `start_time`; then per event in list
 order its `delay` and its `params`. A fixed value draws nothing, so adding
-`delay: 0` changes no draw. When the drawn scenario cannot be placed the sample
-fails; no other scenario is tried, which would bias the weights. The event variants of one topology variant share its OPF and
-power flow: their Parquet snapshot rows are identical except `event_index`.
+`delay: 0` changes no draw, and a `static_id` target draws nothing either. When
+the drawn scenario cannot be placed the sample fails; no other scenario is
+tried, which would bias the weights. The event variants of one topology variant
+share its OPF and power flow: their Parquet snapshot rows are identical except `event_index`.
 
 ### `dynamic.logging` and `dynamic.validate` (optional)
 
@@ -842,8 +846,6 @@ reports neither:
   and so are the events unless `event_perturbation` draws them. What varies is
   the operating point, the branch impedances (with `admittance_perturbation`)
   and the topology (with `topology_perturbation`).
-- Event targets are drawn around an anchor bus; a fixed element cannot be
-  named.
 - Dynawo ignores a power or voltage variation when the target's dynamic model
   does not take it: the run succeeds and the event is recorded, but the curves
   do not change. On the IEEE14 example this is `ActivePowerVariation` and
