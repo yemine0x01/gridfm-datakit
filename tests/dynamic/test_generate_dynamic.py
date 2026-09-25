@@ -293,6 +293,37 @@ def test_multi_event_scenarios_are_drawn_per_event_variant(config_ieee14):
 
 
 @needs_dynawo
+def test_fixed_event_targets_are_simulated(config_ieee14):
+    import pandas as pd
+
+    config_ieee14.dynamic.solver_parameters.stop_time = 60.0
+    del config_ieee14.dynamic.input_files.events_file
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(
+        type="random",
+        n_event_variants=2,
+        scenarios=[
+            {
+                "name": "fixed_trip",
+                "start_time": {"distribution": "uniform", "low": 20, "high": 50},
+                "events": [
+                    {"type": "Disconnect", "target": {"static_id": "_GEN____2_SM"}},
+                ],
+            },
+        ],
+    )
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+    error_log = Path(file_paths["error_log"])
+    assert metadata["n_samples"] == 2, error_log.read_text()
+
+    events = pd.read_parquet(file_paths["events"])
+    assert len(events) == 2
+    assert (events["static_id"] == "_GEN____2_SM").all()
+    assert events["start_time"].nunique() == 2
+
+
+@needs_dynawo
 def test_no_events_writes_no_event_table(config_ieee14):
     del config_ieee14.dynamic.input_files.events_file
     config_ieee14.dynamic.event_perturbation = NestedNamespace(type="none")

@@ -15,11 +15,12 @@ from gridfm_datakit.dynamic.event_perturbation import (
     EVENT_RECORD_COLUMNS,
     EventPerturbation,
     EventTarget,
+    FixedTarget,
     check_event_perturbation,
     draw_events,
     parse_event_perturbation,
 )
-from gridfm_datakit.dynamic.placement import EventGraph
+from gridfm_datakit.dynamic.placement import EventGraph, PlacementError
 from gridfm_datakit.utils.param_handler import NestedNamespace
 
 PATH = "dynamic.event_perturbation"
@@ -111,6 +112,17 @@ def _delayed_fault(delay):
     return block
 
 
+def _fixed_events(*events):
+    def edit(block):
+        block["scenarios"][0]["events"] = list(events)
+
+    return _edit(edit)
+
+
+def _trip(target):
+    return {"type": "Disconnect", "target": target}
+
+
 def _fault(**params):
     return _event(
         "NodeFault",
@@ -145,6 +157,18 @@ class TestParse:
         before = copy.deepcopy(block.to_dict())
         _parse(block)
         assert block.to_dict() == before
+
+    def test_a_fixed_target(self):
+        fixed = {"static_id": "_GEN____2_SM"}
+        (event,) = _parse(_fixed_events(_trip(fixed))).scenarios[0].events
+        assert event.target == FixedTarget("_GEN____2_SM")
+        fault = {
+            "type": "NodeFault",
+            "target": fixed,
+            "params": {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2},
+        }
+        (event,) = _parse(_fixed_events(fault)).scenarios[0].events
+        assert event.target == FixedTarget("_GEN____2_SM")
 
     def test_fixed_anchor_and_single_distance(self):
         def edit(block):
@@ -245,7 +269,7 @@ class TestReject:
                 lambda b: b["scenarios"][0]["events"][0]["target"].update(
                     static_id="_GEN____1_SM",
                 ),
-                f"{SCENARIO}.events[0].target.static_id",
+                f"{SCENARIO}.events[0].target.distance",
             ),
         ],
     )
@@ -261,6 +285,20 @@ class TestReject:
         _raises(
             _edit(lambda b: b["scenarios"][0].update(weight=weight)),
             f"{SCENARIO}.weight",
+        )
+
+    @pytest.mark.parametrize("static_id", ["", 2])
+    def test_an_invalid_static_id(self, static_id):
+        _raises(
+            _fixed_events(_trip({"static_id": static_id})),
+            f"{EVENT}.target.static_id",
+        )
+
+    def test_a_repeated_fixed_target(self):
+        trip = _trip({"static_id": "_GEN____2_SM"})
+        _raises(
+            _fixed_events(trip, copy.deepcopy(trip)),
+            f"{SCENARIO}.events[1].target.static_id",
         )
 
     def test_a_repeated_scenario_name(self):
@@ -569,6 +607,45 @@ class TestDrawEvents:
             pd.testing.assert_frame_equal(frame, draw(event_index))
         assert 0.7 <= trips / 2000 <= 0.8
 
+    def test_a_fixed_target_beside_a_drawn_one(self):
+        graph = _chain_graph()
+        perturbation = _parse(
+            _fixed_events(
+                _trip({"static_id": "G2"}),
+                _trip({"element": "generator", "distance": [0, 5]}),
+            ),
+        )
+
+        def draw(event_index):
+            rng = np.random.default_rng([1, 0, 0, event_index])
+            return draw_events(perturbation, graph, rng)
+
+        for event_index in range(50):
+            frame = draw(event_index)
+            pd.testing.assert_frame_equal(frame, draw(event_index))
+            fixed, drawn = frame["static_id"]
+            assert fixed == "G2"
+            assert drawn != "G2"
+
+    def test_a_scenario_of_fixed_targets_draws_only_its_time(self):
+        graph = _chain_graph()
+        perturbation = _parse(_fixed_events(_trip({"static_id": "L1"})))
+        frames = [
+            draw_events(perturbation, graph, np.random.default_rng([1, 0, 0, e]))
+            for e in range(50)
+        ]
+        for frame in frames:
+            pd.testing.assert_frame_equal(
+                frame.drop(columns="start_time"),
+                frames[0].drop(columns="start_time"),
+            )
+        assert frames[0]["static_id"].tolist() == ["L1"]
+
+    def test_a_fixed_target_out_of_service_fails_the_variant(self):
+        perturbation = _parse(_fixed_events(_trip({"static_id": "G9"})))
+        with pytest.raises(PlacementError, match="G9"):
+            draw_events(perturbation, _chain_graph(), np.random.default_rng(0))
+
     def test_no_scenario_draws_an_empty_frame(self):
         frame = draw_events(
             EventPerturbation(),
@@ -601,6 +678,39 @@ class TestCheck:
                 self._fixed(anchor, distance),
                 PATH_NETWORK_IEEE14,
             )
+
+    def test_a_fixed_target_of_the_network_passes(self):
+        check_event_perturbation(
+            _parse(_fixed_events(_trip({"static_id": "_GEN____2_SM"}))),
+            PATH_NETWORK_IEEE14,
+        )
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            _trip({"static_id": "_GEN___99_SM"}),
+            {
+                "type": "NodeFault",
+                "target": {"static_id": "_GEN____2_SM"},
+                "params": {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2},
+            },
+        ],
+    )
+    def test_an_unusable_fixed_target_raises(self, event):
+        with pytest.raises(
+            ValueError,
+            match="^" + re.escape(f"{EVENT}.target.static_id: "),
+        ):
+            check_event_perturbation(_parse(_fixed_events(event)), PATH_NETWORK_IEEE14)
+
+    def test_a_fixed_target_is_excluded_from_distance_targets(self):
+        block = _fixed_events(
+            _trip({"static_id": "_GEN____2_SM"}),
+            _trip({"element": "generator", "distance": 0}),
+        )
+        block["scenarios"][0]["anchor"] = "_BUS____2_TN"
+        with pytest.raises(ValueError, match=f"^{re.escape(SCENARIO)}.anchor: "):
+            check_event_perturbation(_parse(block), PATH_NETWORK_IEEE14)
 
     def test_file_mode_does_not_load_the_network(self, tmp_path):
         check_event_perturbation(
