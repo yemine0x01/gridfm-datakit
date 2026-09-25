@@ -682,6 +682,9 @@ the static pipeline ([Outputs](outputs.md)) with two differences:
   as the first three columns. `load_scenario_idx` cannot tell two topology
   perturbations of one load scenario apart; this triple can.
 
+Datasets written by release 1.1.0 and earlier carry only `scenario_index` and
+`perturbation_index`; `validate_dynamic_data` reads them as `event_index` 0.
+
 ### Trajectories (`dynamic_results.zarr`)
 
 | Array | Shape | Contents |

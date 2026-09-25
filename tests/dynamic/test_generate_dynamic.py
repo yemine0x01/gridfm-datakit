@@ -44,6 +44,27 @@ def test_generated_data_passes_static_validation(config_ieee14):
 
 
 @needs_dynawo
+def test_datasets_without_event_index_pass_static_validation(config_ieee14, tmp_path):
+    import pandas as pd
+
+    from gridfm_datakit.dynamic.generate_dynamic import generate_dynamic_data
+    from gridfm_datakit.validation import validate_dynamic_data
+
+    config_ieee14.dynamic.solver_parameters.stop_time = 60.0
+    file_paths = generate_dynamic_data(config_ieee14)
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    legacy_paths = {}
+    for key in ("bus_data", "branch_data", "gen_data", "y_bus_data", "runtime_data"):
+        legacy_paths[key] = str(legacy / f"{key}.parquet")
+        pd.read_parquet(file_paths[key]).drop(columns="event_index").to_parquet(
+            legacy_paths[key],
+        )
+    assert validate_dynamic_data(legacy_paths, mode="pf", sn_mva=100.0)
+
+
+@needs_dynawo
 def test_curves_carry_a_time_axis_in_seconds(config_ieee14):
     """Curves are unusable as labels without knowing which instant each column is."""
     import numpy as np
