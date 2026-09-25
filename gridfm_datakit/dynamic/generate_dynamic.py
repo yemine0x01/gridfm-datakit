@@ -43,6 +43,10 @@ import pandas as pd
 import yaml
 
 from gridfm_datakit.dynamic import load_raw_inputs
+from gridfm_datakit.dynamic.event_perturbation import (
+    EVENT_RECORD_COLUMNS,
+    check_event_perturbation,
+)
 from gridfm_datakit.generate import _prepare_network_and_scenarios, _setup_environment
 from gridfm_datakit.process.solver_output import SolverVerbosity
 from gridfm_datakit.utils.column_names import (
@@ -179,6 +183,7 @@ def generate_dynamic_data(
 
     # --- Step 3: dynamic inputs ---
     dynamic_inputs = load_raw_inputs(args)
+    check_event_perturbation(dynamic_inputs.event_perturbation, meta["network_path"])
 
     # --- Step 4: output directory ---
     # Single root: everything this run produces lives under settings.data_dir, in
@@ -407,6 +412,7 @@ class _DynamicDataWriter:
       y_bus_data.parquet
       runtime_data.parquet
       final_state_values.parquet  ← only when the run monitors FinalStateValue rows
+      events.parquet              ← the events each sample simulated
       dynamic_results.zarr/       ← shape (n_samples, n_variables, n_timesteps)
       reports/                    ← one Dynawo report per sample
       metadata.json
@@ -446,6 +452,7 @@ class _DynamicDataWriter:
         self.static_keys: List[tuple] = []
         self.dynamic_scenarios: List[int] = []
         self.dynamic_perturbations: List[int] = []
+        self.dynamic_events: List[int] = []
         self.variable_names: List[str] = []
         self.fsv_names: List[str] = []
         self.report_index: List[str] = []
@@ -473,6 +480,7 @@ class _DynamicDataWriter:
             return
         self._start()
         self._write_static(results)
+        self._write_events(results)
         self._write_curves(results)
         self._write_reports(results)
         self.n_samples += len(results)
@@ -503,8 +511,8 @@ class _DynamicDataWriter:
     def _write_static(self, results: List[Dict[str, Any]]) -> None:
         """Append the static PF snapshot rows for this chunk.
 
-        Every element row is tagged with its (scenario_index, perturbation_index)
-        so the static snapshot (features / initial conditions) can be joined back
+        Every element row is tagged with its (scenario_index, perturbation_index,
+        event_index) so the static snapshot (features / initial conditions) can be joined back
         to the dynamic trajectory (labels) by key rather than by row position.
         This keeps the two modalities aligned even when a sample contributes to
         only one.
@@ -515,7 +523,11 @@ class _DynamicDataWriter:
             if pf_data is None:
                 continue
             keys.append(
-                (result["scenario_index"], result.get("perturbation_index", 0)),
+                (
+                    result["scenario_index"],
+                    result.get("perturbation_index", 0),
+                    result.get("event_index", 0),
+                ),
             )
             for key, pf_key, _ in self._STATIC_TABLES:
                 rows[key].append(pf_data[pf_key])
@@ -525,12 +537,16 @@ class _DynamicDataWriter:
 
         for key, _, columns in self._STATIC_TABLES:
             frames = []
-            for (scenario_id, perturbation_id), array in zip(keys, rows[key]):
+            for (scenario_id, perturbation_id, event_id), array in zip(
+                keys,
+                rows[key],
+            ):
                 array = np.atleast_2d(array)
                 frame = pd.DataFrame(array, columns=columns[: array.shape[1]])
                 # load_scenario_idx cannot tell two perturbations of one load
                 # scenario apart; the composite key below can.
                 frame = frame.drop(columns=_REDUNDANT_STATIC_COLUMNS, errors="ignore")
+                frame.insert(0, "event_index", event_id)
                 frame.insert(0, "perturbation_index", perturbation_id)
                 frame.insert(0, "scenario_index", scenario_id)
                 frames.append(frame)
@@ -564,15 +580,39 @@ class _DynamicDataWriter:
             row = {
                 "scenario_index": result["scenario_index"],
                 "perturbation_index": result.get("perturbation_index", 0),
+                "event_index": result.get("event_index", 0),
             }
             row.update(values)
             rows.append(row)
         if not rows:
             return
         frame = pd.DataFrame(rows).reindex(
-            columns=["scenario_index", "perturbation_index"] + self.fsv_names,
+            columns=["scenario_index", "perturbation_index", "event_index"]
+            + self.fsv_names,
         )
         self._append_parquet("final_state_values", frame)
+
+    def _write_events(self, results: List[Dict[str, Any]]) -> None:
+        """Append one row per event per sample, keyed like the static snapshot.
+
+        No sample carrying events, no file.
+        """
+        frames = []
+        for result in results:
+            events = result.get("events")
+            if events is None or events.empty:
+                continue
+            frame = events.reindex(
+                columns=EVENT_RECORD_COLUMNS,
+                fill_value="",
+            ).reset_index(drop=True)
+            frame.insert(0, "event_index", result.get("event_index", 0))
+            frame.insert(0, "perturbation_index", result.get("perturbation_index", 0))
+            frame.insert(0, "scenario_index", result["scenario_index"])
+            frames.append(frame)
+        if not frames:
+            return
+        self._append_parquet("events", pd.concat(frames, ignore_index=True))
 
     def _append_parquet(self, key: str, frame: pd.DataFrame) -> None:
         """Append a row group to ``key``'s Parquet file, opening it on first use.
@@ -608,7 +648,7 @@ class _DynamicDataWriter:
         (n_samples, n_variables, n_timesteps). Dynawo returns curves as a
         (n_timesteps, n_variables) DataFrame, so transpose here.
         """
-        arrays, times, scenarios, perturbations = [], [], [], []
+        arrays, times, scenarios, perturbations, events = [], [], [], [], []
         for result in results:
             dynamic_results = result.get("dynamic_results")
             if dynamic_results is None or dynamic_results.dynamic_results is None:
@@ -618,6 +658,7 @@ class _DynamicDataWriter:
             times.append(_time_axis_seconds(curves))
             scenarios.append(result["scenario_index"])
             perturbations.append(result.get("perturbation_index", 0))
+            events.append(result.get("event_index", 0))
             if not self.variable_names:
                 self.variable_names = list(curves.columns)
         if not arrays:
@@ -673,6 +714,7 @@ class _DynamicDataWriter:
 
         self.dynamic_scenarios.extend(scenarios)
         self.dynamic_perturbations.extend(perturbations)
+        self.dynamic_events.extend(events)
 
     def _ensure_curves_store(self, n_variables: int, n_timesteps: int) -> None:
         """Create the Zarr store on first use, empty along the sample axis.
@@ -751,7 +793,8 @@ class _DynamicDataWriter:
                 continue
             name = (
                 f"scenario_{result['scenario_index']}"
-                f"_perturbation_{result.get('perturbation_index', 0)}.json"
+                f"_perturbation_{result.get('perturbation_index', 0)}"
+                f"_event_{result.get('event_index', 0)}.json"
             )
             (reports_dir / name).write_text(str(dynamic_results.report))
             self.report_index.append(name)
@@ -786,13 +829,15 @@ class _DynamicDataWriter:
             # time grid. Never assume a shared/uniform time axis; read this instead.
             "time_units": "seconds",
             # Join keys: the Parquet rows are labelled by (scenario_index,
-            # perturbation_index) columns; the Zarr curves slices by the matching
-            # "scenario_index"/"perturbation_index" coordinate arrays. Join the two
-            # modalities on this key pair, never on row/slice position.
+            # perturbation_index, event_index) columns; the Zarr curves slices by
+            # the matching coordinate arrays. Join the two modalities on this key
+            # triple, never on row/slice position.
             "static_scenario_index": [key[0] for key in self.static_keys],
             "static_perturbation_index": [key[1] for key in self.static_keys],
+            "static_event_index": [key[2] for key in self.static_keys],
             "dynamic_scenario_index": self.dynamic_scenarios,
             "dynamic_perturbation_index": self.dynamic_perturbations,
+            "dynamic_event_index": self.dynamic_events,
             # Columns of final_state_values.parquet, in order. Empty when the run
             # monitors no FinalStateValue rows, in which case no such file exists.
             "final_state_value_names": self.fsv_names,
@@ -818,7 +863,7 @@ class _DynamicDataWriter:
         )
 
     def _write_coordinates(self) -> None:
-        """Write the (scenario_index, perturbation_index) coordinate arrays.
+        """Write the (scenario_index, perturbation_index, event_index) coordinates.
 
         They map each curves slice (axis 0) back to the sample it came from, so the
         Zarr labels join to the Parquet snapshot by key. Written once at close,
@@ -828,6 +873,7 @@ class _DynamicDataWriter:
         for name, values in (
             ("scenario_index", self.dynamic_scenarios),
             ("perturbation_index", self.dynamic_perturbations),
+            ("event_index", self.dynamic_events),
         ):
             data = np.asarray(values, dtype="int64")
             if hasattr(self._store, "create_array"):  # zarr v3
