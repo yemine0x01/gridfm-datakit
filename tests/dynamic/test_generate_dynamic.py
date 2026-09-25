@@ -180,6 +180,55 @@ def test_random_events_are_drawn_per_event_variant(config_ieee14):
 
 
 @needs_dynawo
+def test_node_faults_are_drawn_per_event_variant(config_ieee14):
+    import pandas as pd
+    import pypowsybl.network as pn
+
+    config_ieee14.dynamic.solver_parameters.stop_time = 60.0
+    del config_ieee14.dynamic.input_files.events_file
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(
+        type="random",
+        n_event_variants=2,
+        scenarios=[
+            {
+                "name": "node_fault",
+                "start_time": {"distribution": "uniform", "low": 20, "high": 50},
+                "events": [
+                    {
+                        "type": "NodeFault",
+                        "target": {"element": "bus", "distance": [0, 1]},
+                        "params": {
+                            "fault_time": 0.1,
+                            "r_pu": 0,
+                            "x_pu": {
+                                "distribution": "uniform",
+                                "low": 0.01,
+                                "high": 0.1,
+                            },
+                        },
+                    },
+                ],
+            },
+        ],
+    )
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+    error_log = Path(file_paths["error_log"])
+    assert metadata["n_samples"] == 2, error_log.read_text()
+
+    events = pd.read_parquet(file_paths["events"])
+    assert (events["event_name"] == "NodeFault").all()
+    buses = set(pn.load(config_ieee14.network.file).get_bus_breaker_view_buses().index)
+    assert set(events["static_id"]) <= buses
+    x_pu = [
+        float(dict(item.split("=") for item in params.split(";"))["x_pu"])
+        for params in events["params"]
+    ]
+    assert all(0.01 <= value < 0.1 for value in x_pu)
+
+
+@needs_dynawo
 def test_no_events_writes_no_event_table(config_ieee14):
     del config_ieee14.dynamic.input_files.events_file
     config_ieee14.dynamic.event_perturbation = NestedNamespace(type="none")

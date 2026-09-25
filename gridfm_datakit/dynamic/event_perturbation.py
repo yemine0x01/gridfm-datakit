@@ -8,14 +8,29 @@ Form:
         anchor: random | <bus ID>       default random
         start_time: <value spec>        inside the solver window
         events:                         exactly one
-          - type: Disconnect
-            target: {element: <ELEMENT_TYPES>, distance: int | [min, max]}
+          - type: <event type>
+            target: {element: <element>, distance: int | [min, max]}
+            params: {<param>: <value spec>}   every param, none for Disconnect
+
+Event types, allowed elements, params and floors (``_EVENTS``):
+    Disconnect                 every ELEMENT_TYPES
+    NodeFault                  bus                 fault_time > 0, r_pu >= 0, x_pu >= 0
+    ActivePowerVariation       generator, load     delta_p any sign
+    ReactivePowerVariation     generator, load     delta_q any sign
+    ReferenceVoltageVariation  generator           delta_u any sign
+
+``_EVENTS`` copies the keys of ``dynawo.utils.EVENT_PARAMS_MAPPING``: importing
+it here is circular. A test keeps them in sync.
+
+A NodeFault ends at ``start_time + fault_time``, which must not exceed the stop
+time. The other types are instantaneous.
 
 An absent block is ``type: file``, the ``events_file`` rows.
 
 Seeding: one ``default_rng([seed, scenario_index, perturbation_index,
 event_index])`` per event variant, so a draw does not depend on chunking or
-process count.
+process count. Per scenario: placement, start time, then each event's params in
+table order. Disconnect draws no params.
 
 The M event variants of a topology variant share its balanced state: it does not
 depend on the events, so it is computed once. A Dynawo run writes its final state
@@ -24,6 +39,7 @@ into the variant it ran on, so each event variant runs on its own clone.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Tuple
 
@@ -37,14 +53,30 @@ from gridfm_datakit.dynamic.placement import (
     place_scenario,
 )
 from gridfm_datakit.utils.param_handler import NestedNamespace
-from gridfm_datakit.utils.value_spec import POSITIVE, ValueSpec, parse_value_spec
+from gridfm_datakit.utils.value_spec import (
+    NON_NEGATIVE,
+    POSITIVE,
+    Floor,
+    ValueSpec,
+    parse_value_spec,
+)
 
 EVENT_COLUMNS = ["event_name", "static_id", "start_time", "params"]
 
 _PATH = "dynamic.event_perturbation"
 _TYPES = ("none", "file", "random")
-_EVENT_TYPES = ("Disconnect",)
-_EVENT_PARAMS = {"Disconnect": "disconnect_only=;"}
+_ANY_NUMBER = Floor(-math.inf, strict=False)
+_DISCONNECT_PARAMS = "disconnect_only=;"
+_EVENTS = {
+    "Disconnect": (ELEMENT_TYPES, ()),
+    "NodeFault": (
+        ("bus",),
+        (("fault_time", POSITIVE), ("r_pu", NON_NEGATIVE), ("x_pu", NON_NEGATIVE)),
+    ),
+    "ActivePowerVariation": (("generator", "load"), (("delta_p", _ANY_NUMBER),)),
+    "ReactivePowerVariation": (("generator", "load"), (("delta_q", _ANY_NUMBER),)),
+    "ReferenceVoltageVariation": (("generator",), (("delta_u", _ANY_NUMBER),)),
+}
 
 
 @dataclass(frozen=True)
@@ -69,10 +101,12 @@ class EventSpec:
     Args:
         type: The Dynawo event name.
         target: Where the event applies.
+        params: The ``(param, spec)`` pairs of the type, in ``_EVENTS`` order.
     """
 
     type: str
     target: EventTarget
+    params: Tuple[Tuple[str, ValueSpec], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -241,8 +275,14 @@ def draw_events(
         _, placed = place_scenario(graph, scenario.anchor, _targets(scenario), rng)
         start = float(scenario.start_time.sample(rng))
         for event, static_id in zip(scenario.events, placed):
-            rows.append((event.type, static_id, start, _EVENT_PARAMS[event.type]))
+            rows.append((event.type, static_id, start, _draw_params(event, rng)))
     return pd.DataFrame(rows, columns=EVENT_COLUMNS).astype({"start_time": float})
+
+
+def _draw_params(event: EventSpec, rng: np.random.Generator) -> str:
+    if not event.params:
+        return _DISCONNECT_PARAMS
+    return ";".join(f"{key}={float(spec.sample(rng))!r}" for key, spec in event.params)
 
 
 def _targets(scenario: EventScenario) -> list:
@@ -283,21 +323,51 @@ def _parse_scenario(
         raise ValueError(
             f"{path}.events: must be a list of exactly one event, got {events!r}",
         )
+    event = _parse_event(events[0], f"{path}.events[0]")
+    fault_time = dict(event.params).get("fault_time")
+    if fault_time is not None and high + fault_time.support()[1] > stop_time:
+        raise ValueError(
+            f"{path}.events[0].params.fault_time: a fault starting by {high} and "
+            f"lasting up to {fault_time.support()[1]} ends after the stop time "
+            f"{stop_time}",
+        )
     return EventScenario(
         name=name,
         anchor=None if anchor == "random" else anchor,
         start_time=spec,
-        events=(_parse_event(events[0], f"{path}.events[0]"),),
+        events=(event,),
     )
 
 
 def _parse_event(block: Any, path: str) -> EventSpec:
-    _check_keys(block, path, {"type", "target"}, set())
-    if block["type"] not in _EVENT_TYPES:
+    _check_keys(block, path, {"type", "target"}, {"params"})
+    kind = block["type"]
+    if kind not in _EVENTS:
+        raise ValueError(f"{path}.type: must be one of {list(_EVENTS)}, got {kind!r}")
+    target = _parse_target(block["target"], f"{path}.target")
+    elements, floors = _EVENTS[kind]
+    if target.element not in elements:
         raise ValueError(
-            f"{path}.type: must be one of {list(_EVENT_TYPES)}, got {block['type']!r}",
+            f"{path}.target.element: {kind} accepts {list(elements)}, "
+            f"got {target.element!r}",
         )
-    return EventSpec(block["type"], _parse_target(block["target"], f"{path}.target"))
+
+    if not floors:
+        if "params" in block:
+            raise ValueError(f"{path}.params: {kind} takes no params")
+        return EventSpec(kind, target)
+    if "params" not in block:
+        raise ValueError(f"{path}.params: required key is missing")
+    params = block["params"]
+    _check_keys(params, f"{path}.params", {key for key, _ in floors}, set())
+    return EventSpec(
+        kind,
+        target,
+        tuple(
+            (key, parse_value_spec(params[key], f"{path}.params.{key}", floor))
+            for key, floor in floors
+        ),
+    )
 
 
 def _parse_target(block: Any, path: str) -> EventTarget:

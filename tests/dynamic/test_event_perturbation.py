@@ -10,6 +10,7 @@ import pytest
 
 from markers import needs_powsybl
 
+from gridfm_datakit.dynamic.dynawo.utils import EVENT_PARAMS_MAPPING
 from gridfm_datakit.dynamic.event_perturbation import (
     EVENT_COLUMNS,
     EventPerturbation,
@@ -23,6 +24,13 @@ from gridfm_datakit.utils.param_handler import NestedNamespace
 
 PATH = "dynamic.event_perturbation"
 SCENARIO = f"{PATH}.scenarios[0]"
+EVENT = f"{SCENARIO}.events[0]"
+ELEMENTS = {
+    "NodeFault": "bus",
+    "ActivePowerVariation": "load",
+    "ReactivePowerVariation": "generator",
+    "ReferenceVoltageVariation": "generator",
+}
 PATH_NETWORK_IEEE14 = str(
     Path(__file__).parent
     / "dynawo/benchmark_data/ieee14/ieee14_GeneratorDisconnections/IEEE14.iidm",
@@ -66,6 +74,26 @@ def _edit(edit):
     return block
 
 
+def _event(kind, element, params=None, start_time=None):
+    def edit(block):
+        event = {"type": kind, "target": {"element": element, "distance": [0, 2]}}
+        if params is not None:
+            event["params"] = params
+        block["scenarios"][0]["events"] = [event]
+        if start_time is not None:
+            block["scenarios"][0]["start_time"] = start_time
+
+    return _edit(edit)
+
+
+def _fault(**params):
+    return _event(
+        "NodeFault",
+        "bus",
+        {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2, **params},
+    )
+
+
 class TestParse:
     def test_absent_block_is_file(self):
         assert _parse(None) == EventPerturbation()
@@ -101,6 +129,37 @@ class TestParse:
         scenario = _parse(_edit(edit)).scenarios[0]
         assert scenario.anchor == "_BUS____2_TN"
         assert scenario.events[0].target == EventTarget("generator", 1, 1)
+
+    @pytest.mark.parametrize(
+        "kind",
+        sorted(set(EVENT_PARAMS_MAPPING) - {"Disconnect"}),
+    )
+    def test_every_event_type_parses_its_params(self, kind):
+        params = {key: 0.1 for key in EVENT_PARAMS_MAPPING[kind]}
+        (event,) = _parse(_event(kind, ELEMENTS[kind], params)).scenarios[0].events
+        assert event.type == kind
+        assert [key for key, _ in event.params] == EVENT_PARAMS_MAPPING[kind]
+
+    def test_a_negative_delta(self):
+        event = (
+            _parse(
+                _event("ActivePowerVariation", "load", {"delta_p": -0.5}),
+            )
+            .scenarios[0]
+            .events[0]
+        )
+        assert event.params[0][1].support() == (-0.5, -0.5)
+
+    def test_a_fault_ending_before_the_stop_time(self):
+        start = {"distribution": "uniform", "low": 20, "high": 99.8}
+        _parse(
+            _event(
+                "NodeFault",
+                "bus",
+                {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2},
+                start,
+            ),
+        )
 
 
 class TestReject:
@@ -164,8 +223,85 @@ class TestReject:
 
     def test_another_event_type(self):
         _raises(
-            _edit(lambda b: b["scenarios"][0]["events"][0].update(type="NodeFault")),
+            _edit(lambda b: b["scenarios"][0]["events"][0].update(type="Trip")),
             f"{SCENARIO}.events[0].type",
+        )
+
+    @pytest.mark.parametrize(
+        "kind, element",
+        [
+            ("NodeFault", "generator"),
+            ("ReferenceVoltageVariation", "load"),
+            ("ActivePowerVariation", "line"),
+        ],
+    )
+    def test_an_element_the_type_does_not_accept(self, kind, element):
+        params = {key: 0.1 for key in EVENT_PARAMS_MAPPING[kind]}
+        _raises(_event(kind, element, params), f"{EVENT}.target.element")
+
+    def test_a_missing_param(self):
+        block = _event("NodeFault", "bus", {"fault_time": 0.1, "x_pu": 0.2})
+        with pytest.raises(
+            ValueError,
+            match=f"^{re.escape(EVENT)}.params.r_pu: required key is missing",
+        ):
+            _parse(block)
+
+    def test_a_param_of_another_type(self):
+        with pytest.raises(
+            ValueError,
+            match=f"^{re.escape(EVENT)}.params.delta_p: unknown key",
+        ):
+            _parse(_fault(delta_p=0.1))
+
+    def test_params_on_a_disconnection(self):
+        _raises(
+            _edit(
+                lambda b: b["scenarios"][0]["events"][0].update(
+                    params={"disconnect_only": 0},
+                ),
+            ),
+            f"{EVENT}.params",
+        )
+
+    def test_missing_params(self):
+        with pytest.raises(
+            ValueError,
+            match=f"^{re.escape(EVENT)}.params: required key is missing",
+        ):
+            _parse(_event("ActivePowerVariation", "load"))
+
+    @pytest.mark.parametrize(
+        "key, spec",
+        [
+            ("fault_time", 0),
+            ("r_pu", -0.1),
+            ("x_pu", {"distribution": "uniform", "low": -1, "high": 1}),
+        ],
+    )
+    def test_a_param_below_its_floor(self, key, spec):
+        _raises(_fault(**{key: spec}), f"{EVENT}.params.{key}")
+
+    def test_a_delta_that_is_not_a_number(self):
+        _raises(
+            _event(
+                "ActivePowerVariation",
+                "load",
+                {"delta_p": {"distribution": "choice", "values": ["a"]}},
+            ),
+            f"{EVENT}.params.delta_p",
+        )
+
+    def test_a_fault_ending_after_the_stop_time(self):
+        start = {"distribution": "uniform", "low": 20, "high": 99.95}
+        _raises(
+            _event(
+                "NodeFault",
+                "bus",
+                {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2},
+                start,
+            ),
+            f"{EVENT}.params.fault_time",
         )
 
     def test_unknown_element(self):
@@ -253,6 +389,52 @@ class TestDrawEvents:
                 graph.distances(anchor).get(bus, 99) <= 2 for anchor in graph.adjacency
             )
         assert differs
+
+    def test_node_faults_are_reproducible_and_bounded(self):
+        graph = _chain_graph()
+        perturbation = _parse(
+            _event(
+                "NodeFault",
+                "bus",
+                {
+                    "fault_time": {
+                        "distribution": "normal",
+                        "mean": 0.1,
+                        "std": 0.02,
+                        "min": 0.05,
+                        "max": 0.2,
+                    },
+                    "r_pu": 0,
+                    "x_pu": {"distribution": "uniform", "low": 0.01, "high": 0.1},
+                },
+            ),
+        )
+
+        def draw(event_index):
+            rng = np.random.default_rng([1, 0, 0, event_index])
+            return draw_events(perturbation, graph, rng)
+
+        for event_index in range(20):
+            frame = draw(event_index)
+            pd.testing.assert_frame_equal(frame, draw(event_index))
+            assert frame["event_name"].iloc[0] == "NodeFault"
+            pairs = [item.split("=") for item in frame["params"].iloc[0].split(";")]
+            assert [key for key, _ in pairs] == ["fault_time", "r_pu", "x_pu"]
+            values = {key: float(value) for key, value in pairs}
+            assert 0.05 <= values["fault_time"] <= 0.2
+            assert dict(pairs)["r_pu"] == "0.0"
+            assert 0.01 <= values["x_pu"] < 0.1
+
+    def test_a_power_variation_draws_its_delta(self):
+        perturbation = _parse(
+            _event("ActivePowerVariation", "generator", {"delta_p": 0.1}),
+        )
+        frame = draw_events(
+            perturbation,
+            _chain_graph(),
+            np.random.default_rng([1, 0, 0, 0]),
+        )
+        assert frame["params"].iloc[0] == "delta_p=0.1"
 
     def test_no_scenario_draws_an_empty_frame(self):
         frame = draw_events(
