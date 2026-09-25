@@ -293,11 +293,25 @@ def test_events_are_recorded_per_sample(tmp_path):
     frame = pd.read_parquet(out / "events.parquet")
     key = ["scenario_index", "perturbation_index", "event_index"]
     cols = ["event_name", "static_id", "start_time", "params"]
-    assert list(frame.columns) == key + cols
+    assert list(frame.columns) == key + ["scenario"] + cols
     assert len(frame) == 4
+    assert (frame["scenario"] == "").all()
     for sample, events in (((0, 0, 0), first), ((1, 2, 3), second)):
         rows = frame[(frame[key] == sample).all(axis=1)]
         pd.testing.assert_frame_equal(rows[cols].reset_index(drop=True), events[cols])
+
+
+def test_drawn_scenario_names_are_recorded(tmp_path):
+    first = _events(10.0).assign(scenario="trip")
+    second = _events(20.0).assign(scenario="fault")
+    results = [
+        _result(0, events=first),
+        _result(0, event_index=1, events=second),
+    ]
+    out, _, _ = _save(results, tmp_path)
+
+    frame = pd.read_parquet(out / "events.parquet")
+    assert frame["scenario"].tolist() == ["trip", "trip", "fault", "fault"]
 
 
 def test_no_events_writes_no_table(tmp_path):

@@ -165,6 +165,7 @@ def test_random_events_are_drawn_per_event_variant(config_ieee14):
 
     events = pd.read_parquet(file_paths["events"])
     assert events["event_index"].tolist() == [0, 1, 2]
+    assert (events["scenario"] == "generator_trip").all()
     generators = set(pn.load(config_ieee14.network.file).get_generators().index)
     assert set(events["static_id"]) <= generators
     assert len(set(zip(events["static_id"], events["start_time"]))) == 3
@@ -226,6 +227,48 @@ def test_node_faults_are_drawn_per_event_variant(config_ieee14):
         for params in events["params"]
     ]
     assert all(0.01 <= value < 0.1 for value in x_pu)
+
+
+@needs_dynawo
+def test_multi_event_scenarios_are_drawn_per_event_variant(config_ieee14):
+    import pandas as pd
+
+    config_ieee14.dynamic.solver_parameters.stop_time = 60.0
+    del config_ieee14.dynamic.input_files.events_file
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(
+        type="random",
+        n_event_variants=2,
+        scenarios=[
+            {
+                "name": "trip_then_fault",
+                "start_time": {"distribution": "uniform", "low": 20, "high": 50},
+                "events": [
+                    {
+                        "type": "Disconnect",
+                        "target": {"element": "generator", "distance": [0, 2]},
+                    },
+                    {
+                        "type": "NodeFault",
+                        "target": {"element": "bus", "distance": [0, 1]},
+                        "delay": {"distribution": "uniform", "low": 0.1, "high": 0.3},
+                        "params": {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.05},
+                    },
+                ],
+            },
+        ],
+    )
+
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+    error_log = Path(file_paths["error_log"])
+    assert metadata["n_samples"] == 2, error_log.read_text()
+
+    events = pd.read_parquet(file_paths["events"])
+    assert len(events) == 4
+    for _, group in events.groupby("event_index"):
+        assert group["event_name"].tolist() == ["Disconnect", "NodeFault"]
+        start, later = group["start_time"]
+        assert 0.1 <= later - start < 0.3
 
 
 @needs_dynawo

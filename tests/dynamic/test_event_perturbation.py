@@ -12,7 +12,7 @@ from markers import needs_powsybl
 
 from gridfm_datakit.dynamic.dynawo.utils import EVENT_PARAMS_MAPPING
 from gridfm_datakit.dynamic.event_perturbation import (
-    EVENT_COLUMNS,
+    EVENT_RECORD_COLUMNS,
     EventPerturbation,
     EventTarget,
     check_event_perturbation,
@@ -86,6 +86,31 @@ def _event(kind, element, params=None, start_time=None):
     return _edit(edit)
 
 
+def _with_second_event(extra):
+    def edit(block):
+        block["scenarios"][0]["events"].append(
+            {
+                "type": "NodeFault",
+                "target": {"element": "bus", "distance": [0, 2]},
+                "params": {"fault_time": 0.1, "r_pu": 0, "x_pu": 0.2},
+                **extra,
+            },
+        )
+
+    return _edit(edit)
+
+
+def _delayed_fault(delay):
+    block = _fault()
+    block["scenarios"][0]["start_time"] = {
+        "distribution": "uniform",
+        "low": 20,
+        "high": 99.5,
+    }
+    block["scenarios"][0]["events"][0]["delay"] = delay
+    return block
+
+
 def _fault(**params):
     return _event(
         "NodeFault",
@@ -150,6 +175,26 @@ class TestParse:
         )
         assert event.params[0][1].support() == (-0.5, -0.5)
 
+    def test_a_second_scenario(self):
+        def edit(block):
+            second = copy.deepcopy(block["scenarios"][0])
+            second["name"] = "another_trip"
+            block["scenarios"].append(second)
+
+        scenarios = _parse(_edit(edit)).scenarios
+        assert [s.name for s in scenarios] == ["generator_trip", "another_trip"]
+        assert [s.weight for s in scenarios] == [1.0, 1.0]
+
+    def test_a_second_event(self):
+        delay = {"distribution": "uniform", "low": 0.1, "high": 0.3}
+        scenario = _parse(_with_second_event({"delay": delay})).scenarios[0]
+        first, second = scenario.events
+        assert first.delay.support() == (0.0, 0.0)
+        assert second.delay.support() == (0.1, 0.3)
+
+    def test_a_delayed_fault_ending_before_the_stop_time(self):
+        _parse(_delayed_fault(0.3))
+
     def test_a_fault_ending_before_the_stop_time(self):
         start = {"distribution": "uniform", "low": 20, "high": 99.8}
         _parse(
@@ -188,10 +233,13 @@ class TestReject:
         "edit, path",
         [
             (lambda b: b.update(seed=1), f"{PATH}.seed"),
-            (lambda b: b["scenarios"][0].update(weight=1), f"{SCENARIO}.weight"),
             (
-                lambda b: b["scenarios"][0]["events"][0].update(delay=1),
-                f"{SCENARIO}.events[0].delay",
+                lambda b: b["scenarios"][0].update(probability=1),
+                f"{SCENARIO}.probability",
+            ),
+            (
+                lambda b: b["scenarios"][0]["events"][0].update(offset=1),
+                f"{SCENARIO}.events[0].offset",
             ),
             (
                 lambda b: b["scenarios"][0]["events"][0]["target"].update(
@@ -205,21 +253,41 @@ class TestReject:
         with pytest.raises(ValueError, match=f"^{re.escape(path)}: unknown key"):
             _parse(_edit(edit))
 
-    def test_a_second_scenario(self):
+    def test_no_scenario(self):
+        _raises(_random(scenarios=[]), f"{PATH}.scenarios")
+
+    @pytest.mark.parametrize("weight", [0, -1, True, "1"])
+    def test_invalid_weight(self, weight):
         _raises(
-            _edit(lambda b: b["scenarios"].append(b["scenarios"][0])),
-            f"{PATH}.scenarios",
+            _edit(lambda b: b["scenarios"][0].update(weight=weight)),
+            f"{SCENARIO}.weight",
         )
 
-    def test_a_second_event(self):
+    def test_a_repeated_scenario_name(self):
         _raises(
-            _edit(
-                lambda b: b["scenarios"][0]["events"].append(
-                    b["scenarios"][0]["events"][0],
-                ),
-            ),
+            _edit(lambda b: b["scenarios"].append(copy.deepcopy(b["scenarios"][0]))),
+            f"{PATH}.scenarios[1].name",
+        )
+
+    def test_no_event(self):
+        _raises(
+            _edit(lambda b: b["scenarios"][0].update(events=[])),
             f"{SCENARIO}.events",
         )
+
+    def test_a_negative_delay(self):
+        _raises(
+            _edit(lambda b: b["scenarios"][0]["events"][0].update(delay=-0.1)),
+            f"{EVENT}.delay",
+        )
+
+    def test_a_delay_past_the_stop_time(self):
+        block = _with_second_event({"delay": 0.1})
+        block["scenarios"][0]["start_time"]["high"] = 99.95
+        _raises(block, f"{SCENARIO}.events[1].delay")
+
+    def test_a_delayed_fault_ending_after_the_stop_time(self):
+        _raises(_delayed_fault(0.45), f"{EVENT}.params.fault_time")
 
     def test_another_event_type(self):
         _raises(
@@ -362,9 +430,10 @@ class TestDrawEvents:
         graph = _chain_graph()
         perturbation = _parse(_random())
         frame = draw_events(perturbation, graph, np.random.default_rng([1, 0, 0, 0]))
-        assert list(frame.columns) == EVENT_COLUMNS
+        assert list(frame.columns) == EVENT_RECORD_COLUMNS
         assert len(frame) == 1
         row = frame.iloc[0]
+        assert row["scenario"] == "generator_trip"
         assert row["event_name"] == "Disconnect"
         assert row["params"] == "disconnect_only=;"
         assert frame["start_time"].dtype == float
@@ -436,13 +505,77 @@ class TestDrawEvents:
         )
         assert frame["params"].iloc[0] == "delta_p=0.1"
 
+    def test_a_trip_then_a_delayed_fault(self):
+        graph = _chain_graph()
+        perturbation = _parse(
+            _with_second_event(
+                {"delay": {"distribution": "uniform", "low": 0.1, "high": 0.3}},
+            ),
+        )
+
+        def draw(event_index):
+            rng = np.random.default_rng([1, 0, 0, event_index])
+            return draw_events(perturbation, graph, rng)
+
+        for event_index in range(20):
+            frame = draw(event_index)
+            pd.testing.assert_frame_equal(frame, draw(event_index))
+            assert frame["event_name"].tolist() == ["Disconnect", "NodeFault"]
+            assert frame["static_id"].nunique() == 2
+            start, later = frame["start_time"]
+            assert 0.1 <= later - start < 0.3
+            assert 20 <= start < 80
+
+    def test_a_zero_delay_draws_as_no_delay(self):
+        graph = _chain_graph()
+        delayed = _parse(
+            _edit(lambda b: b["scenarios"][0]["events"][0].update(delay=0)),
+        )
+        for event_index in range(20):
+            frames = [
+                draw_events(
+                    perturbation,
+                    graph,
+                    np.random.default_rng([1, 0, 0, event_index]),
+                )
+                for perturbation in (_parse(_random()), delayed)
+            ]
+            pd.testing.assert_frame_equal(*frames)
+
+    def test_scenarios_are_drawn_by_weight(self):
+        graph = _chain_graph()
+        trip = _random()["scenarios"][0]
+        fault = _fault()["scenarios"][0]
+        perturbation = _parse(
+            _random(
+                scenarios=[
+                    {**trip, "name": "trip", "weight": 3},
+                    {**fault, "name": "fault", "weight": 1},
+                ],
+            ),
+        )
+        kind = {"trip": "Disconnect", "fault": "NodeFault"}
+
+        def draw(event_index):
+            rng = np.random.default_rng([1, 0, 0, event_index])
+            return draw_events(perturbation, graph, rng)
+
+        trips = 0
+        for event_index in range(2000):
+            frame = draw(event_index)
+            (name,) = frame["scenario"].unique()
+            assert (frame["event_name"] == kind[name]).all()
+            trips += name == "trip"
+            pd.testing.assert_frame_equal(frame, draw(event_index))
+        assert 0.7 <= trips / 2000 <= 0.8
+
     def test_no_scenario_draws_an_empty_frame(self):
         frame = draw_events(
             EventPerturbation(),
             _chain_graph(),
             np.random.default_rng(0),
         )
-        assert frame.empty and list(frame.columns) == EVENT_COLUMNS
+        assert frame.empty and list(frame.columns) == EVENT_RECORD_COLUMNS
 
 
 @needs_powsybl

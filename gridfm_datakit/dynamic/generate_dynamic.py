@@ -44,7 +44,7 @@ import yaml
 
 from gridfm_datakit.dynamic import load_raw_inputs
 from gridfm_datakit.dynamic.event_perturbation import (
-    EVENT_COLUMNS,
+    EVENT_RECORD_COLUMNS,
     check_event_perturbation,
 )
 from gridfm_datakit.generate import _prepare_network_and_scenarios, _setup_environment
@@ -602,7 +602,10 @@ class _DynamicDataWriter:
             events = result.get("events")
             if events is None or events.empty:
                 continue
-            frame = events[EVENT_COLUMNS].reset_index(drop=True)
+            frame = events.reindex(
+                columns=EVENT_RECORD_COLUMNS,
+                fill_value="",
+            ).reset_index(drop=True)
             frame.insert(0, "event_index", result.get("event_index", 0))
             frame.insert(0, "perturbation_index", result.get("perturbation_index", 0))
             frame.insert(0, "scenario_index", result["scenario_index"])

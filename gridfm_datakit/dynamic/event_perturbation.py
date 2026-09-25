@@ -3,14 +3,16 @@
 Form:
     type: none | file | random          required when the block is present
     n_event_variants: M                 positive int, default 1, 1 unless random
-    scenarios:                          random only, exactly one
-      - name: str
+    scenarios:                          random only, one or more
+      - name: str                       unique, recorded in events.parquet
         anchor: random | <bus ID>       default random
+        weight: float                   > 0, default 1
         start_time: <value spec>        inside the solver window
-        events:                         exactly one
+        events:                         one or more, targets distinct
           - type: <event type>
             target: {element: <element>, distance: int | [min, max]}
             params: {<param>: <value spec>}   every param, none for Disconnect
+            delay: <value spec>         >= 0, default 0, time start_time + delay
 
 Event types, allowed elements, params and floors (``_EVENTS``):
     Disconnect                 every ELEMENT_TYPES
@@ -22,15 +24,19 @@ Event types, allowed elements, params and floors (``_EVENTS``):
 ``_EVENTS`` copies the keys of ``dynawo.utils.EVENT_PARAMS_MAPPING``: importing
 it here is circular. A test keeps them in sync.
 
-A NodeFault ends at ``start_time + fault_time``, which must not exceed the stop
-time. The other types are instantaneous.
+Window, per event: ``start_time + delay``, plus ``fault_time`` for a NodeFault,
+must not exceed the stop time, checked on the largest value each spec can take.
+The other types are instantaneous.
 
 An absent block is ``type: file``, the ``events_file`` rows.
 
 Seeding: one ``default_rng([seed, scenario_index, perturbation_index,
 event_index])`` per event variant, so a draw does not depend on chunking or
-process count. Per scenario: placement, start time, then each event's params in
-table order. Disconnect draws no params.
+process count. Draw order: the scenario by weight, only when there are several;
+its placement; its start time; then per event in list order its delay and its
+params in table order. A placement failure raises: another scenario would bias
+the weights. A fixed spec draws nothing, so
+no delay and Disconnect cost no draw.
 
 The M event variants of a topology variant share its balanced state: it does not
 depend on the events, so it is computed once. A Dynawo run writes its final state
@@ -56,17 +62,20 @@ from gridfm_datakit.utils.param_handler import NestedNamespace
 from gridfm_datakit.utils.value_spec import (
     NON_NEGATIVE,
     POSITIVE,
+    Fixed,
     Floor,
     ValueSpec,
     parse_value_spec,
 )
 
 EVENT_COLUMNS = ["event_name", "static_id", "start_time", "params"]
+EVENT_RECORD_COLUMNS = ["scenario"] + EVENT_COLUMNS
 
 _PATH = "dynamic.event_perturbation"
 _TYPES = ("none", "file", "random")
 _ANY_NUMBER = Floor(-math.inf, strict=False)
 _DISCONNECT_PARAMS = "disconnect_only=;"
+_NO_DELAY = Fixed(0.0)
 _EVENTS = {
     "Disconnect": (ELEMENT_TYPES, ()),
     "NodeFault": (
@@ -102,11 +111,13 @@ class EventSpec:
         type: The Dynawo event name.
         target: Where the event applies.
         params: The ``(param, spec)`` pairs of the type, in ``_EVENTS`` order.
+        delay: The time after the scenario's start time.
     """
 
     type: str
     target: EventTarget
     params: Tuple[Tuple[str, ValueSpec], ...] = ()
+    delay: ValueSpec = _NO_DELAY
 
 
 @dataclass(frozen=True)
@@ -114,16 +125,19 @@ class EventScenario:
     """A set of events drawn around one anchor bus.
 
     Args:
-        name: The scenario name, used in error messages.
+        name: The scenario name, used in error messages and recorded with every
+            drawn event.
         anchor: A bus ID, or ``None`` to draw one.
         start_time: The event time spec.
         events: The events of the scenario.
+        weight: The relative chance of drawing this scenario.
     """
 
     name: str
     anchor: Optional[str]
     start_time: ValueSpec
     events: Tuple[EventSpec, ...]
+    weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -133,7 +147,8 @@ class EventPerturbation:
     Args:
         type: ``none``, ``file`` or ``random``.
         n_event_variants: The event variants per topology variant.
-        scenarios: The scenarios drawn in ``random`` mode.
+        scenarios: The scenarios of ``random`` mode, one drawn per event
+            variant.
     """
 
     type: str = "file"
@@ -200,18 +215,22 @@ def parse_event_perturbation(
             "and stop_time to check event times",
         )
     scenarios = block.get("scenarios")
-    if not isinstance(scenarios, list) or len(scenarios) != 1:
+    if not isinstance(scenarios, list) or not scenarios:
         raise ValueError(
-            f"{_PATH}.scenarios: must be a list of exactly one scenario, "
+            f"{_PATH}.scenarios: must be a non-empty list of scenarios, "
             f"got {scenarios!r}",
         )
-    scenario = _parse_scenario(
-        scenarios[0],
-        f"{_PATH}.scenarios[0]",
-        float(start_time),
-        float(stop_time),
-    )
-    return EventPerturbation(kind, n_event_variants, (scenario,))
+    parsed = []
+    for index, entry in enumerate(scenarios):
+        path = f"{_PATH}.scenarios[{index}]"
+        scenario = _parse_scenario(entry, path, float(start_time), float(stop_time))
+        if any(scenario.name == other.name for other in parsed):
+            raise ValueError(
+                f"{path}.name: {scenario.name!r} is already the name of an "
+                "earlier scenario",
+            )
+        parsed.append(scenario)
+    return EventPerturbation(kind, n_event_variants, tuple(parsed))
 
 
 def check_event_perturbation(
@@ -265,18 +284,33 @@ def draw_events(
         rng: The generator of the event variant.
 
     Returns:
-        pd.DataFrame: One row per event, columns ``EVENT_COLUMNS``.
+        pd.DataFrame: One row per event, columns ``EVENT_RECORD_COLUMNS``.
 
     Raises:
-        PlacementError: If a scenario cannot be placed.
+        PlacementError: If the drawn scenario cannot be placed.
     """
     rows = []
-    for scenario in perturbation.scenarios:
+    scenarios = perturbation.scenarios
+    if len(scenarios) > 1:
+        weights = np.array([scenario.weight for scenario in scenarios])
+        scenarios = (scenarios[rng.choice(len(scenarios), p=weights / weights.sum())],)
+    for scenario in scenarios:
         _, placed = place_scenario(graph, scenario.anchor, _targets(scenario), rng)
         start = float(scenario.start_time.sample(rng))
         for event, static_id in zip(scenario.events, placed):
-            rows.append((event.type, static_id, start, _draw_params(event, rng)))
-    return pd.DataFrame(rows, columns=EVENT_COLUMNS).astype({"start_time": float})
+            delay = float(event.delay.sample(rng))
+            rows.append(
+                (
+                    scenario.name,
+                    event.type,
+                    static_id,
+                    start + delay,
+                    _draw_params(event, rng),
+                ),
+            )
+    return pd.DataFrame(rows, columns=EVENT_RECORD_COLUMNS).astype(
+        {"start_time": float},
+    )
 
 
 def _draw_params(event: EventSpec, rng: np.random.Generator) -> str:
@@ -298,7 +332,7 @@ def _parse_scenario(
     start_time: float,
     stop_time: float,
 ) -> EventScenario:
-    _check_keys(block, path, {"name", "start_time", "events"}, {"anchor"})
+    _check_keys(block, path, {"name", "start_time", "events"}, {"anchor", "weight"})
 
     name = block["name"]
     if not isinstance(name, str) or not name:
@@ -310,6 +344,17 @@ def _parse_scenario(
             f"{path}.anchor: must be 'random' or a bus ID, got {anchor!r}",
         )
 
+    weight = block.get("weight", 1)
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, (int, float))
+        or not math.isfinite(weight)
+        or weight <= 0
+    ):
+        raise ValueError(
+            f"{path}.weight: must be a positive finite number, got {weight!r}",
+        )
+
     spec = parse_value_spec(block["start_time"], f"{path}.start_time", POSITIVE)
     low, high = spec.support()
     if low < start_time or high > stop_time:
@@ -319,28 +364,39 @@ def _parse_scenario(
         )
 
     events = block["events"]
-    if not isinstance(events, list) or len(events) != 1:
+    if not isinstance(events, list) or not events:
         raise ValueError(
-            f"{path}.events: must be a list of exactly one event, got {events!r}",
+            f"{path}.events: must be a non-empty list of events, got {events!r}",
         )
-    event = _parse_event(events[0], f"{path}.events[0]")
-    fault_time = dict(event.params).get("fault_time")
-    if fault_time is not None and high + fault_time.support()[1] > stop_time:
-        raise ValueError(
-            f"{path}.events[0].params.fault_time: a fault starting by {high} and "
-            f"lasting up to {fault_time.support()[1]} ends after the stop time "
-            f"{stop_time}",
-        )
+    parsed = []
+    for index, entry in enumerate(events):
+        event_path = f"{path}.events[{index}]"
+        event = _parse_event(entry, event_path)
+        end = high + event.delay.support()[1]
+        if end > stop_time:
+            raise ValueError(
+                f"{event_path}.delay: an event at up to {end} falls after the "
+                f"stop time {stop_time}",
+            )
+        fault_time = dict(event.params).get("fault_time")
+        if fault_time is not None and end + fault_time.support()[1] > stop_time:
+            raise ValueError(
+                f"{event_path}.params.fault_time: a fault starting by {end} and "
+                f"lasting up to {fault_time.support()[1]} ends after the stop "
+                f"time {stop_time}",
+            )
+        parsed.append(event)
     return EventScenario(
         name=name,
         anchor=None if anchor == "random" else anchor,
         start_time=spec,
-        events=(event,),
+        events=tuple(parsed),
+        weight=float(weight),
     )
 
 
 def _parse_event(block: Any, path: str) -> EventSpec:
-    _check_keys(block, path, {"type", "target"}, {"params"})
+    _check_keys(block, path, {"type", "target"}, {"params", "delay"})
     kind = block["type"]
     if kind not in _EVENTS:
         raise ValueError(f"{path}.type: must be one of {list(_EVENTS)}, got {kind!r}")
@@ -351,11 +407,16 @@ def _parse_event(block: Any, path: str) -> EventSpec:
             f"{path}.target.element: {kind} accepts {list(elements)}, "
             f"got {target.element!r}",
         )
+    delay = (
+        parse_value_spec(block["delay"], f"{path}.delay", NON_NEGATIVE)
+        if "delay" in block
+        else _NO_DELAY
+    )
 
     if not floors:
         if "params" in block:
             raise ValueError(f"{path}.params: {kind} takes no params")
-        return EventSpec(kind, target)
+        return EventSpec(kind, target, delay=delay)
     if "params" not in block:
         raise ValueError(f"{path}.params: required key is missing")
     params = block["params"]
@@ -367,6 +428,7 @@ def _parse_event(block: Any, path: str) -> EventSpec:
             (key, parse_value_spec(params[key], f"{path}.params.{key}", floor))
             for key, floor in floors
         ),
+        delay,
     )
 
 
@@ -408,6 +470,7 @@ def _check_keys(block: Any, path: str, required: set, optional: set) -> None:
 
 __all__ = [
     "EVENT_COLUMNS",
+    "EVENT_RECORD_COLUMNS",
     "EventTarget",
     "EventSpec",
     "EventScenario",
