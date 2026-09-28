@@ -324,6 +324,63 @@ def test_fixed_event_targets_are_simulated(config_ieee14):
 
 
 @needs_dynawo
+@pytest.mark.parametrize(
+    "static_id",
+    [
+        pytest.param("_BUS___10_TN", id="bus"),
+        pytest.param("_BUS___10-BUS___11-1_AC", id="line"),
+        pytest.param("_BUS____4-BUS____7-1_PT", id="transformer"),
+    ],
+)
+def test_disconnecting_a_bus_line_or_transformer_moves_the_curves(
+    config_ieee14,
+    static_id,
+):
+    import numpy as np
+    import pandas as pd
+    import zarr
+
+    config_ieee14.dynamic.solver_parameters.stop_time = 60.0
+    del config_ieee14.dynamic.input_files.events_file
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(type="none")
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    base = np.asarray(zarr.open(file_paths["dynamic_results"], mode="r")["curves"])
+
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(
+        type="random",
+        n_event_variants=1,
+        scenarios=[
+            {
+                "name": "fixed_disconnect",
+                "start_time": 20,
+                "events": [
+                    {"type": "Disconnect", "target": {"static_id": static_id}},
+                ],
+            },
+        ],
+    )
+    file_paths = gd.generate_dynamic_data(config_ieee14)
+    metadata = json.loads(Path(file_paths["metadata"]).read_text())
+    error_log = Path(file_paths["error_log"]).read_text()
+    assert metadata["n_samples"] == 1, error_log
+    assert metadata["n_samples_with_curves"] == 1
+    assert not re.search(r"^\[dynamic\]", error_log, re.MULTILINE), error_log
+
+    events = pd.read_parquet(file_paths["events"])
+    assert len(events) == 1
+    assert events["event_name"].iloc[0] == "Disconnect"
+    assert events["static_id"].iloc[0] == static_id
+    assert events["start_time"].iloc[0] == 20
+
+    curves = np.asarray(zarr.open(file_paths["dynamic_results"], mode="r")["curves"])
+    assert curves.shape != base.shape or not np.allclose(
+        curves,
+        base,
+        equal_nan=True,
+    ), static_id
+
+
+@needs_dynawo
 def test_no_events_writes_no_event_table(config_ieee14):
     del config_ieee14.dynamic.input_files.events_file
     config_ieee14.dynamic.event_perturbation = NestedNamespace(type="none")
