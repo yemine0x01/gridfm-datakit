@@ -51,6 +51,18 @@ class TestParse:
         )
         assert spec.support() == (0.0, pytest.approx(0.4))
 
+    def test_one_sided_normal_support(self):
+        spec = parse_value_spec(
+            {"distribution": "normal", "mean": 10, "std": 1, "min": 15.9},
+            PATH,
+        )
+        assert spec.support() == (15.9, pytest.approx(21.9))
+        spec = parse_value_spec(
+            {"distribution": "normal", "mean": 0, "std": 1, "max": -5.9},
+            PATH,
+        )
+        assert spec.support() == (pytest.approx(-11.9), -5.9)
+
     def test_uniform(self):
         spec = parse_value_spec({"distribution": "uniform", "low": 1, "high": 4}, PATH)
         assert isinstance(spec, Uniform)
@@ -128,6 +140,20 @@ class TestSample:
         assert draws.min() > -0.5 and draws.max() < 0.5
         assert np.array_equal(draws, _draws(spec, 0))
         assert not np.array_equal(draws, _draws(spec, 1))
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            {"mean": 0, "std": 1, "min": 5.9},
+            {"mean": 0, "std": 1, "max": -5.9},
+            {"mean": 10, "std": 1, "min": 15.9},
+        ],
+    )
+    def test_one_sided_tail_draws_stay_inside_the_support(self, spec):
+        spec = parse_value_spec({"distribution": "normal", **spec}, PATH)
+        low, high = spec.support()
+        draws = _draws(spec, 0)
+        assert ((low <= draws) & (draws <= high)).all()
 
     def test_normal_draws_are_floats(self):
         spec = parse_value_spec({"distribution": "normal", "mean": 0, "std": 1}, PATH)

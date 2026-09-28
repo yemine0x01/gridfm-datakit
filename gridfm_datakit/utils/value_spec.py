@@ -8,9 +8,10 @@ Forms:
 
 Out of range values are redrawn, never clipped: a normal is sampled from
 ``scipy.stats.truncnorm`` on ``[min, max]`` intersected with the floor. A
-truncation interval that misses ``[mean - 6 std, mean + 6 std]`` is rejected at
-parse, so no draw lands on a region of negligible mass. ``support()`` is the worst
-case a caller validates against, the 6 std interval for an unbounded side.
+truncation interval with no overlap with ``[mean - 6 std, mean + 6 std]`` is
+rejected at parse. ``support()`` is the worst case a caller validates against: an
+unbounded side lies 6 std beyond the mean, or beyond the other side's bound when
+that is further out.
 
 A floor is checked at parse: fixed, uniform and choice specs are rejected when
 their support fails it, a normal takes it as a lower truncation bound.
@@ -148,16 +149,22 @@ class Normal(ValueSpec):
         )
 
     def support(self) -> Tuple[float, float]:
-        """Return the 6 std interval intersected with the truncation bounds.
+        """Return the worst case bounds of a draw.
+
+        An unbounded side lies 6 std beyond the mean or beyond the bound on the
+        other side, whichever is further out.
 
         Returns:
             Tuple[float, float]: The worst case bounds.
         """
         span = _NORMAL_SPAN * self.std
-        return (
-            max(self.mean - span, self.lower),
-            min(self.mean + span, self.upper),
-        )
+        lower = self.lower
+        if math.isinf(lower):
+            lower = min(self.mean, self.upper) - span
+        upper = self.upper
+        if math.isinf(upper):
+            upper = max(self.mean, self.lower) + span
+        return lower, upper
 
 
 @dataclass(frozen=True)
