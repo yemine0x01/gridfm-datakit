@@ -213,9 +213,9 @@ type `none` or `random` the key is optional, and ignored with a warning when set
 
 | `event_name` | `params` keys |
 | --- | --- |
-| `ActivePowerVariation` | `delta_p` |
-| `ReactivePowerVariation` | `delta_q` |
-| `ReferenceVoltageVariation` | `delta_u` |
+| `ActivePowerVariation` | `delta_p`: for a load modelled as `LoadAlphaBeta`, `LoadZIP` or `ElectronicLoad`, a fraction of its reference active power (0.1 raises it by 10 %); for a generator, per unit of its nominal power `PNom` |
+| `ReactivePowerVariation` | `delta_q`: for a load modelled as `LoadAlphaBeta`, `LoadZIP` or `ElectronicLoad`, a fraction of its reference reactive power |
+| `ReferenceVoltageVariation` | `delta_u`: per unit of the generator's nominal voltage `UNom` |
 | `NodeFault` | `fault_time`, `r_pu`, `x_pu` |
 | `Disconnect` | `disconnect_only` (optional; leave the value empty to disconnect the whole element) |
 
@@ -395,9 +395,9 @@ draws a load step.
 | `type` | `target.element` | `params` |
 | --- | --- | --- |
 | `NodeFault` | `bus` | `fault_time` positive, `r_pu` and `x_pu` non-negative |
-| `ActivePowerVariation` | `generator`, `load` | `delta_p`, any sign |
-| `ReactivePowerVariation` | `generator`, `load` | `delta_q`, any sign |
-| `ReferenceVoltageVariation` | `generator` | `delta_u`, any sign |
+| `ActivePowerVariation` | `generator`, `load` | `delta_p`, any sign, unit as in `events_file` |
+| `ReactivePowerVariation` | `generator`, `load` | `delta_q`, any sign, unit as in `events_file` |
+| `ReferenceVoltageVariation` | `generator` | `delta_u`, any sign, unit as in `events_file` |
 
 A node fault on a bus drawn at `distance` 0 or 1 hop from a random anchor:
 
@@ -855,10 +855,18 @@ reports neither:
   and the topology (with `topology_perturbation`).
 - Dynawo ignores a power or voltage variation when the target's dynamic model
   does not take it: the run succeeds and the event is recorded, but the curves
-  do not change. On the IEEE14 example this is `ActivePowerVariation` and
-  `ReactivePowerVariation` on `_LOAD___6_EC` and `_LOAD___9_EC`, the loads
-  modelled as `LoadOneTransformerTapChanger`, `ReactivePowerVariation` on every
-  synchronous generator, and `ReferenceVoltageVariation` on `_GEN____3_SM`.
+  do not change. On IEEE14 this is `ActivePowerVariation` and
+  `ReactivePowerVariation` on the loads modelled as
+  `LoadOneTransformerTapChanger` (`_LOAD___6_EC` and `_LOAD___9_EC` in the
+  example) or `LoadTwoTransformersTapChangers` (`_LOAD___2_EC` in the test
+  configuration), `ReactivePowerVariation` on every synchronous generator, and
+  `ReferenceVoltageVariation` on `_GEN____3_SM`.
+- The event graph joins buses by branches only. Bus-breaker buses linked by a
+  closed switch alone are placed as if apart, and a bus reached only through one
+  is unreachable from the anchor.
+- A bus of the network file with no in-service branch is still a random anchor,
+  around which only distance 0 can be placed, and a `bus` target. The topology
+  perturbation never leaves such a bus, since it keeps connected variants only.
 - `events_file` times are not checked against the simulation window.
 - `generation_perturbation` does not work: the powsybl reader supplies no real
   generator costs for it to perturb.
