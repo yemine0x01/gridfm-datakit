@@ -201,6 +201,24 @@ class TestFloor:
         )
         assert (_draws(spec, 0) > 0).all()
 
+    def test_normal_redraws_a_value_on_a_strict_floor(self, monkeypatch):
+        class Stub:
+            def __init__(self):
+                self.values = iter([0.0, 0.3])
+
+            def rvs(self, *args, **kwargs):
+                return next(self.values)
+
+        spec = {"distribution": "normal", "mean": 0.1, "std": 0.05}
+        rng = np.random.default_rng(0)
+        monkeypatch.setattr("gridfm_datakit.utils.value_spec.truncnorm", Stub())
+        positive = parse_value_spec(spec, PATH, POSITIVE)
+        assert positive.strict
+        assert positive.sample(rng) == 0.3
+        monkeypatch.setattr("gridfm_datakit.utils.value_spec.truncnorm", Stub())
+        assert parse_value_spec(spec, PATH, NON_NEGATIVE).sample(rng) == 0.0
+        assert not parse_value_spec({**spec, "min": 0.05}, PATH, POSITIVE).strict
+
     def test_normal_far_below_the_floor(self):
         with pytest.raises(ValueError, match=f"^{re.escape(PATH)}: "):
             parse_value_spec(

@@ -14,7 +14,8 @@ unbounded side lies 6 std beyond the mean, or beyond the other side's bound when
 that is further out.
 
 A floor is checked at parse: fixed, uniform and choice specs are rejected when
-their support fails it, a normal takes it as a lower truncation bound.
+their support fails it, a normal takes it as a lower truncation bound and redraws a
+value equal to a strict one.
 """
 
 from __future__ import annotations
@@ -126,12 +127,14 @@ class Normal(ValueSpec):
         std: The standard deviation before truncation.
         lower: The lower truncation bound, ``-inf`` when unbounded.
         upper: The upper truncation bound, ``inf`` when unbounded.
+        strict: Whether ``lower`` is excluded.
     """
 
     mean: float
     std: float
     lower: float = -math.inf
     upper: float = math.inf
+    strict: bool = False
 
     def sample(self, rng: np.random.Generator) -> float:
         """Draw from the truncated normal.
@@ -140,13 +143,16 @@ class Normal(ValueSpec):
             rng: The generator the draw comes from.
 
         Returns:
-            float: A value inside ``[lower, upper]``.
+            float: A value inside ``[lower, upper]``, above ``lower`` when strict.
         """
         a = (self.lower - self.mean) / self.std
         b = (self.upper - self.mean) / self.std
-        return float(
-            truncnorm.rvs(a, b, loc=self.mean, scale=self.std, random_state=rng),
-        )
+        while True:
+            x = float(
+                truncnorm.rvs(a, b, loc=self.mean, scale=self.std, random_state=rng),
+            )
+            if not (self.strict and x <= self.lower):
+                return x
 
     def support(self) -> Tuple[float, float]:
         """Return the worst case bounds of a draw.
@@ -297,7 +303,8 @@ def _parse_normal(
             f"{path}: truncation interval [{lower}, {upper}] misses "
             f"[{mean - span}, {mean + span}], mean +/- {_NORMAL_SPAN:g} std",
         )
-    return Normal(mean, std, lower, upper)
+    strict = floor is not None and floor.strict and lower == floor.bound
+    return Normal(mean, std, lower, upper, strict)
 
 
 def _parse_uniform(
