@@ -861,6 +861,12 @@ reports neither:
   example) or `LoadTwoTransformersTapChangers` (`_LOAD___2_EC` in the test
   configuration), `ReactivePowerVariation` on every synchronous generator, and
   `ReferenceVoltageVariation` on `_GEN____3_SM`.
+- The event graph joins buses by branches only. Bus-breaker buses linked by a
+  closed switch alone are placed as if apart, and a bus reached only through one
+  is unreachable from the anchor.
+- A bus of the network file with no in-service branch is still a random anchor,
+  around which only distance 0 can be placed, and a `bus` target. The topology
+  perturbation never leaves such a bus, since it keeps connected variants only.
 - `events_file` times are not checked against the simulation window.
 - `generation_perturbation` does not work: the powsybl reader supplies no real
   generator costs for it to perturb.
