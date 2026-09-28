@@ -434,16 +434,20 @@ accepts.
 
 Every value `start_time` can take must lie inside the `[start_time, stop_time]`
 window of `dynamic.solver_parameters`, checked when the config is loaded. For a
-normal, a side with `min` or `max` ends there, and a side without one ends
-6 std beyond `mean`, or beyond the other side's bound when that is further out.
+normal, a side with `min` or `max`, or the param's floor, ends there, and a
+side without one ends 6 std beyond `mean`, or beyond the other side's bound
+when that is further out.
 Each event must also fall by `stop_time`: the largest `start_time` plus the largest `delay` may
 not exceed it, and for a `NodeFault` neither may that sum plus the largest
 `fault_time`. The other types are instantaneous.
 
 Each event variant draws from
 `numpy.random.default_rng([settings.seed, scenario_index, perturbation_index,
-event_index])`, so a seed gives the same events whatever `num_processes` and
-`large_chunk_size`. The draws come in this order: the scenario by `weight`, only
+event_index])`, so unless `topology_perturbation.type` is `random` a seed gives
+the same events whatever `num_processes` and `large_chunk_size`. A random
+topology perturbation draws per chunk, so the chunking changes the topology
+variants and the targets placed on them.
+The draws come in this order: the scenario by `weight`, only
 when there are several; its targets; its `start_time`; then per event in list
 order its `delay` and its `params`. A fixed value draws nothing, so adding
 `delay: 0` changes no draw, and a `static_id` target draws nothing either. When

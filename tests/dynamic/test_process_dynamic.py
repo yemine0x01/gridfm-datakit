@@ -415,6 +415,7 @@ def _chunk_args(
     dynamic_solver="dynawo",
     error_log_file=None,
     config=None,
+    event_perturbation=EventPerturbation(),
 ):
     """Build the positional tuple _process_dynamic_chunk unpacks."""
     return (
@@ -424,7 +425,7 @@ def _chunk_args(
         "network.iidm",  # network_path
         types.SimpleNamespace(
             events="events",
-            event_perturbation=EventPerturbation(),
+            event_perturbation=event_perturbation,
         ),  # dynamic_inputs
         dynamic_solver,
         error_log_file,
@@ -554,6 +555,29 @@ class TestProcessDynamicChunk:
 
         assert first[0]["draw"] != second[0]["draw"]
         assert first[0]["draw"] == first_again[0]["draw"]  # and it is reproducible
+
+    def test_event_draws_do_not_depend_on_the_chunking(self, monkeypatch):
+        _stub_worker_setup(monkeypatch)
+        TestEventVariants._stub(monkeypatch)
+
+        def run(chunks):
+            results = [
+                r
+                for start_idx, end_idx in chunks
+                for r in pdyn._process_dynamic_chunk(
+                    _chunk_args(start_idx, end_idx, event_perturbation=_RANDOM_EVENTS),
+                )
+            ]
+            key = ("scenario_index", "perturbation_index", "event_index")
+            return {tuple(r[k] for k in key): r["events"] for r in results}
+
+        whole = run([(0, 4)])
+        split = run([(0, 1), (1, 3), (3, 4)])
+
+        assert whole.keys() == split.keys()
+        assert len(whole) == 12
+        for key, events in whole.items():
+            pd.testing.assert_frame_equal(events, split[key])
 
 
 class _InlinePool:
