@@ -444,6 +444,22 @@ class TestReject:
             f"{SCENARIO}.start_time",
         )
 
+    def test_a_normal_start_time_past_the_stop_time(self):
+        _raises(
+            _edit(
+                lambda b: b["scenarios"][0].update(
+                    start_time={
+                        "distribution": "normal",
+                        "mean": 10,
+                        "std": 1,
+                        "min": 15.9,
+                    },
+                ),
+            ),
+            f"{SCENARIO}.start_time",
+            stop_time=16.0,
+        )
+
 
 def _chain_graph():
     buses = [f"B{i}" for i in range(6)]
