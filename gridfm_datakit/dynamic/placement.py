@@ -2,7 +2,9 @@
 
 Graph: the working variant of the network. Nodes are the buses of the
 bus-breaker view, edges the lines and two-winding transformers connected at both
-ends, so a graph built after the topology perturbation sees what was cut.
+ends and each pair of connected ends of a three-winding transformer, so a graph
+built after the topology perturbation sees what was cut. A three-winding
+transformer is an edge only, never a target.
 
 Distance: breadth-first hop count from the anchor. A generator or load sits at
 its bus's distance, a branch at its nearer end's. Unreachable elements are never
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from itertools import combinations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -85,6 +88,23 @@ class EventGraph:
                 neighbours[bus1].add(bus2)
                 neighbours[bus2].add(bus1)
                 candidates[element].append((branch_id, (bus1, bus2)))
+        three_windings = pp_net.get_3_windings_transformers(
+            attributes=[
+                "bus_breaker_bus1_id",
+                "bus_breaker_bus2_id",
+                "bus_breaker_bus3_id",
+                "connected1",
+                "connected2",
+                "connected3",
+            ],
+        )
+        for _, row in three_windings.iterrows():
+            ends = [
+                row[f"bus_breaker_bus{i}_id"] for i in (1, 2, 3) if row[f"connected{i}"]
+            ]
+            for bus1, bus2 in combinations(ends, 2):
+                neighbours[bus1].add(bus2)
+                neighbours[bus2].add(bus1)
         for element, frame in injections.items():
             connected = frame[frame["connected"]]
             candidates[element] = [

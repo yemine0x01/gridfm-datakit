@@ -164,6 +164,50 @@ def test_the_graph_sees_the_perturbed_variant(network):
     assert _draw(initial, BUS2, [("generator", 1, 1)], 0)[0] == BUS2
 
 
+B1 = "e44141af-f1dc-44d3-bfa4-b674e5c953d7"
+B2 = "99b219f3-4593-428b-a4da-124a54630178"
+B3 = "f96d552a-618d-4d0c-a39a-2dea3c411dee"
+HUB = "5c74cb26-ce2f-40c6-951d-89091eb781b6"
+LEAF = "a81d08ed-f51d-4538-8d1e-fb2d0dbd128e"
+FAR = "f70f6bad-eb8d-4b8f-8431-4ab93581514e"
+T3 = "84ed55f4-61f5-4d9d-8755-bba7b877a246"
+G3 = "550ebe0d-f2b2-48c1-991f-cebea43a21aa"
+
+
+@pytest.fixture
+def micro_grid():
+    import pypowsybl.network as pn
+
+    return pn.create_micro_grid_be_network()
+
+
+def test_three_winding_transformers_are_edges(micro_grid):
+    graph = EventGraph.from_network(micro_grid)
+    assert graph.distances(B2) == {B2: 0, HUB: 1, FAR: 1, B1: 1, B3: 1, LEAF: 2}
+    assert {_draw(graph, B2, [("generator", 1, 1)], s)[1][0] for s in SEEDS} == {G3}
+
+
+def test_a_three_winding_transformer_is_not_a_target(micro_grid):
+    graph = EventGraph.from_network(micro_grid)
+    assert graph.element_type(T3) is None
+    assert all(
+        T3 not in {element_id for element_id, _ in listed}
+        for listed in graph.candidates.values()
+    )
+
+
+def test_a_disconnected_end_of_a_three_winding_transformer_is_not_an_edge(
+    micro_grid,
+):
+    micro_grid.clone_variant(micro_grid.get_working_variant_id(), "perturbed")
+    micro_grid.set_working_variant("perturbed")
+    micro_grid.update_3_windings_transformers(id=T3, connected3=False)
+
+    distances = EventGraph.from_network(micro_grid).distances(B2)
+    assert distances[B1] == 1
+    assert B3 not in distances
+
+
 def test_an_unplaceable_random_scenario_gives_up(graph):
     with pytest.raises(PlacementError, match=str(MAX_ANCHOR_ATTEMPTS)):
         _draw(graph, None, [("generator", 20, 20)], 0)

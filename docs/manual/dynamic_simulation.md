@@ -424,9 +424,11 @@ A value spec is a number, fixed, or one of:
 
 Values outside the bounds are redrawn, never clipped.
 
-`distance` counts branch hops from the anchor over the lines and two-winding
-transformers in service after the topology perturbation. A generator or load
-sits at its bus's distance, a branch at its nearer end's. A random anchor is
+`distance` counts branch hops from the anchor over the lines, two-winding
+transformers and three-winding transformers in service after the topology
+perturbation, a three-winding transformer joining each pair of its connected
+ends. A generator or load sits at its bus's distance, a branch at its nearer
+end's. A three-winding transformer is never a target. A random anchor is
 redrawn, up to 100 times, when a target cannot be placed around it. A fixed
 anchor is checked against the network file before any simulation, and so is
 every `static_id`: it must be in service and of an element type its event
