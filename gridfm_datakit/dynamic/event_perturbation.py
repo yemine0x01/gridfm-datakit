@@ -38,11 +38,12 @@ An absent block is ``type: file``, the ``events_file`` rows.
 
 Seeding: one ``default_rng([seed, scenario_index, perturbation_index,
 event_index])`` per event variant, so a draw does not depend on chunking or
-process count. Draw order: the scenario by weight, only when there are several;
-the placement of its distance targets; its start time; then per event in list
-order its delay and its params in table order. A placement failure raises:
-another scenario would bias the weights. A fixed spec draws nothing, so no delay
-and Disconnect cost no draw.
+process count, unless the topology perturbation is random, which draws per chunk
+and so moves the targets. Draw order: the scenario by weight, only when there
+are several; the placement of its distance targets; its start time; then per
+event in list order its delay and its params in table order. A placement failure
+raises: another scenario would bias the weights. A fixed spec draws nothing, so
+no delay and Disconnect cost no draw.
 
 The M event variants of a topology variant share its balanced state: it does not
 depend on the events, so it is computed once. A Dynawo run writes its final state
