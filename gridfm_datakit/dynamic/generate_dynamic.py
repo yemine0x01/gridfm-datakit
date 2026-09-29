@@ -667,6 +667,7 @@ class _DynamicDataWriter:
             sample_key = (
                 result["scenario_index"],
                 result.get("perturbation_index", 0),
+                result.get("event_index", 0),
             )
             duplicate_names = (
                 dynamic_results.dynamic_results.columns[

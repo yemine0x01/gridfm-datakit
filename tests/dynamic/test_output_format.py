@@ -197,12 +197,13 @@ def test_variable_name_mismatch_raises(tmp_path):
     out = tmp_path / "dyn"
     out.mkdir(parents=True)
     first = _result(0, n_variables=2)
-    second = _result(1, n_variables=2)
+    second = _result(1, perturbation_index=2, event_index=3, n_variables=2)
     second["dynamic_results"].dynamic_results.columns = ["v0", "other"]
 
     with pytest.raises(
         ValueError,
-        match=r"variable names: missing \['v1'\], unexpected \['other'\]",
+        match=r"sample \(1, 2, 3\) disagrees on variable names: "
+        r"missing \['v1'\], unexpected \['other'\]",
     ):
         _write([first, second], out)
 
