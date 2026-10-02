@@ -34,7 +34,8 @@ Window, per event: ``start_time + delay``, plus ``fault_time`` for a NodeFault,
 must not exceed the stop time, checked on the largest value each spec can take.
 The other types are instantaneous.
 
-An absent block is ``type: file``, the ``events_file`` rows.
+Without the block, the events are the rows of ``events_file``, as with
+``type: file``.
 
 Seeding: one ``default_rng([seed, scenario_index, perturbation_index,
 event_index])`` per event variant, so a draw does not depend on chunking or
