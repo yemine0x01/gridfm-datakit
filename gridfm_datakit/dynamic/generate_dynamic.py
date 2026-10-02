@@ -115,9 +115,9 @@ def generate_dynamic_data(
     dictionnary or a NestedNamespace.
 
     Runs the full pipeline:
-    1. Validate config.
+    1. Validate config and read the dynamic inputs.
     2. Prepare network + load scenarios.
-    3. Load and prepare Dynawo mappings.
+    3. Check fixed event targets and prepare Dynawo mappings.
     4. Build solver parameters.
     5. Run distributed dynamic simulations.
     6. Save static (Parquet) + dynamic (Zarr) outputs.
@@ -155,6 +155,7 @@ def generate_dynamic_data(
 
     _validate_dynamic_config(args)
     _configure_logging(args)
+    dynamic_inputs = load_raw_inputs(args)
 
     # --- Step 1: standard environment setup (reuse generate.py logic) ---
     args, base_path, file_paths, seed = _setup_environment(args)
@@ -181,8 +182,7 @@ def generate_dynamic_data(
     # reload the network themselves from that path (see _process_dynamic_chunk).
     _, scenarios, meta = _prepare_network_and_scenarios(args, file_paths, seed)
 
-    # --- Step 3: dynamic inputs ---
-    dynamic_inputs = load_raw_inputs(args)
+    # --- Step 3: fixed event targets ---
     check_event_perturbation(dynamic_inputs.event_perturbation, meta["network_path"])
 
     # --- Step 4: output directory ---

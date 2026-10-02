@@ -392,6 +392,20 @@ def test_no_events_writes_no_event_table(config_ieee14):
     assert "events" not in file_paths
 
 
+def test_a_malformed_event_block_raises_before_the_output_is_set_up(
+    config_ieee14,
+    monkeypatch,
+):
+    def _fail(args):
+        raise AssertionError("the output was set up before the inputs were read")
+
+    monkeypatch.setattr(gd, "_validate_dynamic_config", lambda args: None)
+    monkeypatch.setattr(gd, "_setup_environment", _fail)
+    config_ieee14.dynamic.event_perturbation = NestedNamespace(type="sometimes")
+    with pytest.raises(ValueError, match=r"dynamic\.event_perturbation\.type"):
+        gd.generate_dynamic_data(config_ieee14)
+
+
 @needs_dynawo
 def test_validate_flag_runs_the_validation_suite(config_ieee14, monkeypatch):
     config_ieee14.dynamic.validate = True
