@@ -10,7 +10,9 @@ Distance: breadth-first hop count from the anchor. A generator or load sits at
 its bus's distance, a branch at its nearer end's. Unreachable elements are never
 candidates.
 
-A random anchor is redrawn when a target cannot be placed, at most
+Targets are drawn in list order, each among the candidates that leave the later
+targets a distinct element each (bipartite matching), so a placement fails only
+when no assignment exists. A random anchor is redrawn when none does, at most
 ``MAX_ANCHOR_ATTEMPTS`` times, so a scenario unplaceable from most buses fails
 the variant instead of spinning.
 
@@ -224,19 +226,50 @@ def _place_from(
     rng: np.random.Generator,
     exclude: Sequence[str],
 ) -> Optional[List[str]]:
-    placed: List[str] = []
-    for element, low, high in targets:
-        allowed = [
+    pools = [
+        [
             element_id
             for element_id, buses in graph.candidates[element]
-            if element_id not in placed
-            and element_id not in exclude
+            if element_id not in exclude
             and _element_distance(distance, buses) in range(low, high + 1)
+        ]
+        for element, low, high in targets
+    ]
+    placed: List[str] = []
+    for index, pool in enumerate(pools):
+        rest = pools[index + 1 :]
+        shared = set().union(*rest)
+        rest_placeable = _matchable(rest, placed)
+        allowed = [
+            element_id
+            for element_id in pool
+            if element_id not in placed
+            and (
+                _matchable(rest, placed + [element_id])
+                if element_id in shared
+                else rest_placeable
+            )
         ]
         if not allowed:
             return None
         placed.append(allowed[rng.integers(len(allowed))])
     return placed
+
+
+def _matchable(pools: Sequence[List[str]], taken: Sequence[str]) -> bool:
+    owner: Dict[str, int] = {}
+
+    def augment(index: int, seen: set) -> bool:
+        for element_id in pools[index]:
+            if element_id in taken or element_id in seen:
+                continue
+            seen.add(element_id)
+            if element_id not in owner or augment(owner[element_id], seen):
+                owner[element_id] = index
+                return True
+        return False
+
+    return all(augment(index, set()) for index in range(len(pools)))
 
 
 def _element_distance(

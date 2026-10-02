@@ -100,6 +100,18 @@ def test_targets_of_one_scenario_are_distinct(graph):
         assert first != second
 
 
+def test_a_wide_target_leaves_a_narrow_one_its_element(graph):
+    for seed in SEEDS:
+        _, (wide, narrow) = _draw(
+            graph,
+            BUS2,
+            [("generator", 0, 1), ("generator", 0, 0)],
+            seed,
+        )
+        assert narrow == "_GEN____2_SM"
+        assert wide in {"_GEN____1_SM", "_GEN____3_SM"}
+
+
 def test_excluded_elements_are_never_placed(graph):
     excluded = "_GEN____1_SM"
     targets = [("generator", 0, 1)]
