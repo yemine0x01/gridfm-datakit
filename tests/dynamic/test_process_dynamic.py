@@ -270,6 +270,16 @@ class TestProcessSingleDynamicSimulation:
         results = self._run(_FakePpNet(), None)
         assert len(results) == 1 and results[0]["perturbation_index"] == 0
 
+    def test_a_single_event_variant_runs_on_the_topology_variant(self, monkeypatch):
+        _stub_solver_steps(monkeypatch)
+        pp_net = _FakePpNet()
+
+        self._run(pp_net, _ListTopologyGenerator(2))
+
+        assert [call for call in pp_net.calls if call[0] == "clone"] == [
+            ("clone", "base", f"scenario_0_perturbation_{p}") for p in range(2)
+        ]
+
     def test_every_simulation_receives_the_events(self, monkeypatch):
         _, seen_events = _stub_solver_steps(monkeypatch)
         events = object()
@@ -358,6 +368,19 @@ class TestEventVariants:
             (p, e) for p in range(2) for e in range(3)
         ]
         assert len(static_calls) == 2
+        assert [call for call in pp_net.calls if call[0] == "clone"] == [
+            clone
+            for p in range(2)
+            for clone in [("clone", "base", f"scenario_0_perturbation_{p}")]
+            + [
+                (
+                    "clone",
+                    f"scenario_0_perturbation_{p}",
+                    f"scenario_0_perturbation_{p}_event_{e}",
+                )
+                for e in range(2)
+            ]
+        ]
         for p in range(2):
             shared = [r["pf_data"] for r in results if r["perturbation_index"] == p]
             assert all(pf is shared[0] for pf in shared)

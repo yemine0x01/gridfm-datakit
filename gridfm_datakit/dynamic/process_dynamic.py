@@ -382,6 +382,9 @@ def process_single_dynamic_simulation(
     otherwise it runs ``events``. Each simulation builds its event mapping from
     them, which replaces the event mapping in ``dynamic_mappings``. Each sample
     carries the events it simulated. A failed event variant drops only its sample.
+    Dynawo writes its final state into the variant it runs on, so each event
+    variant but the last runs on a clone of the topology variant, the last on the
+    topology variant itself.
 
     Returns a list of result dicts (possibly empty if every perturbation failed).
     """
@@ -450,8 +453,12 @@ def process_single_dynamic_simulation(
             )
 
             # Step 3 and 4: one dynamic simulation per event variant, labelled
-            for event_index in range(event_perturbation.n_event_variants):
-                event_variant_id = f"{variant_id}_event_{event_index}"
+            n_event_variants = event_perturbation.n_event_variants
+            for event_index in range(n_event_variants):
+                in_place = event_index == n_event_variants - 1
+                event_variant_id = (
+                    variant_id if in_place else f"{variant_id}_event_{event_index}"
+                )
                 event_variant_created = False
                 try:
                     if graph is None:
@@ -464,8 +471,9 @@ def process_single_dynamic_simulation(
                                 [seed, scenario_index, perturbation_index, event_index],
                             ),
                         )
-                    pp_net.clone_variant(variant_id, event_variant_id)
-                    event_variant_created = True
+                    if not in_place:
+                        pp_net.clone_variant(variant_id, event_variant_id)
+                        event_variant_created = True
                     pp_net.set_working_variant(event_variant_id)
 
                     dyn_results = _run_dynamic_simulation(
