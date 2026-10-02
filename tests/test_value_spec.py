@@ -155,6 +155,19 @@ class TestSample:
         draws = _draws(spec, 0)
         assert ((low <= draws) & (draws <= high)).all()
 
+    def test_an_unbounded_normal_is_drawn_inside_its_support(self, monkeypatch):
+        calls = []
+
+        class Stub:
+            def rvs(self, a, b, **kwargs):
+                calls.append((a, b))
+                return 0.0
+
+        monkeypatch.setattr("gridfm_datakit.utils.value_spec.truncnorm", Stub())
+        spec = parse_value_spec({"distribution": "normal", "mean": 2, "std": 1}, PATH)
+        spec.sample(np.random.default_rng(0))
+        assert calls == [(-6.0, 6.0)]
+
     def test_normal_draws_are_floats(self):
         spec = parse_value_spec({"distribution": "normal", "mean": 0, "std": 1}, PATH)
         assert type(spec.sample(np.random.default_rng(0))) is float

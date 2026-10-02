@@ -440,7 +440,7 @@ Every value `start_time` can take must lie inside the `[start_time, stop_time]`
 window of `dynamic.solver_parameters`, checked when the config is loaded. For a
 normal, a side with `min` or `max`, or the param's floor, ends there, and a
 side without one ends 6 std beyond `mean`, or beyond the other side's bound
-when that is further out.
+when that is further out. A draw never passes either end.
 Each event must also fall by `stop_time`: the largest `start_time` plus the largest `delay` may
 not exceed it, and for a `NodeFault` neither may that sum plus the largest
 `fault_time`. The other types are instantaneous.

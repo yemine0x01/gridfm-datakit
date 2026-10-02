@@ -7,11 +7,11 @@ Forms:
     {distribution: choice, values, weights?}            one listed value
 
 Out of range values are redrawn, never clipped: a normal is sampled from
-``scipy.stats.truncnorm`` on ``[min, max]`` intersected with the floor. A
-truncation interval with no overlap with ``[mean - 6 std, mean + 6 std]`` is
-rejected at parse. ``support()`` is the worst case a caller validates against: an
-unbounded side lies 6 std beyond the mean, or beyond the other side's bound when
-that is further out.
+``scipy.stats.truncnorm`` on its ``support()``, ``[min, max]`` intersected with
+the floor, an unbounded side ending 6 std beyond the mean, or beyond the other
+side's bound when that is further out. A truncation interval with no overlap with
+``[mean - 6 std, mean + 6 std]`` is rejected at parse. Draws never leave the
+support, so a caller validates against it.
 
 A floor is checked at parse: fixed, uniform and choice specs are rejected when
 their support fails it, a normal takes it as a lower truncation bound and redraws a
@@ -120,7 +120,7 @@ class Fixed(ValueSpec):
 
 @dataclass(frozen=True)
 class Normal(ValueSpec):
-    """A normal distribution truncated to ``[lower, upper]``.
+    """A normal distribution truncated to its support.
 
     Args:
         mean: The mean before truncation.
@@ -143,10 +143,11 @@ class Normal(ValueSpec):
             rng: The generator the draw comes from.
 
         Returns:
-            float: A value inside ``[lower, upper]``, above ``lower`` when strict.
+            float: A value inside the support, above ``lower`` when strict.
         """
-        a = (self.lower - self.mean) / self.std
-        b = (self.upper - self.mean) / self.std
+        lower, upper = self.support()
+        a = (lower - self.mean) / self.std
+        b = (upper - self.mean) / self.std
         while True:
             x = float(
                 truncnorm.rvs(a, b, loc=self.mean, scale=self.std, random_state=rng),
