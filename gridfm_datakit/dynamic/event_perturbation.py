@@ -487,7 +487,7 @@ def _parse_scenario(
 def _parse_event(block: Any, path: str) -> EventSpec:
     _check_keys(block, path, {"type", "target"}, {"params", "delay"})
     kind = block["type"]
-    if kind not in _EVENTS:
+    if not isinstance(kind, str) or kind not in _EVENTS:
         raise ValueError(f"{path}.type: must be one of {list(_EVENTS)}, got {kind!r}")
     target = _parse_target(block["target"], f"{path}.target")
     elements, floors = _EVENTS[kind]

@@ -95,6 +95,14 @@ class TestRejects:
     def test_missing_distribution(self):
         self._raises({"mean": 0, "std": 1}, "normal", "uniform", "choice")
 
+    def test_a_list_distribution(self):
+        self._raises(
+            {"distribution": ["uniform"], "low": 1, "high": 2},
+            "normal",
+            "uniform",
+            "choice",
+        )
+
     def test_unknown_distribution(self):
         self._raises(
             {"distribution": "lognormal", "mean": 0, "std": 1},

@@ -327,9 +327,10 @@ class TestReject:
     def test_a_delayed_fault_ending_after_the_stop_time(self):
         _raises(_delayed_fault(0.45), f"{EVENT}.params.fault_time")
 
-    def test_another_event_type(self):
+    @pytest.mark.parametrize("kind", ["Trip", ["Disconnect"]])
+    def test_another_event_type(self, kind):
         _raises(
-            _edit(lambda b: b["scenarios"][0]["events"][0].update(type="Trip")),
+            _edit(lambda b: b["scenarios"][0]["events"][0].update(type=kind)),
             f"{SCENARIO}.events[0].type",
         )
 

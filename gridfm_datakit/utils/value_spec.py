@@ -263,7 +263,7 @@ def parse_value_spec(
         return Fixed(value)
 
     distribution = spec.get("distribution")
-    if distribution not in _KEYS:
+    if not isinstance(distribution, str) or distribution not in _KEYS:
         raise ValueError(
             f"{path}: distribution must be one of {sorted(_KEYS)}, "
             f"got {distribution!r}",
