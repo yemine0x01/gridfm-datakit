@@ -18,11 +18,14 @@ class MappingP2G:
         ``{pp_branch_id: gfm_branch_row}``
     gen : Dict[str, int]
         ``{pp_gen_id: gfm_gen_row}``
+    bus_number : Dict[str, int]
+        ``{pp_bus_id: original_bus_number}``, the number a solution is keyed by
     """
 
     bus: Dict[str, float]
     branch: Dict[str, int]
     gen: Dict[str, int]
+    bus_number: Dict[str, int]
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +36,7 @@ class MappingP2G:
 def build_p2g_maps(
     network: Network,
     pp_net,
+    connected_gens_only: bool = False,
 ) -> MappingP2G:
     """Build pypowsybl-to-gridfm ID maps in O(n) by parsing pypowsybl element IDs.
 
@@ -53,6 +57,9 @@ def build_p2g_maps(
         The gridfm_datakit Network passed to ``to_powsybl()`` to produce *pp_net*.
     pp_net:
         The pypowsybl network produced by ``to_powsybl(network)``.
+    connected_gens_only:
+        Map only the connected generators. Set when *network* comes from
+        pypowsybl's MATPOWER export, which leaves disconnected generators out.
 
     Returns
     -------
@@ -90,9 +97,11 @@ def build_p2g_maps(
     # -------------------------------------------------------------------------
     # 1. Gen map — direct enumeration (row order is preserved by pypowsybl)
     # -------------------------------------------------------------------------
+    gens = pp_net.get_generators()
+    if connected_gens_only:
+        gens = gens[gens["connected"]]
     map_gen_p2g: Dict[str, int] = {
-        pp_gen_id: gfm_row
-        for gfm_row, pp_gen_id in enumerate(pp_net.get_generators().index)
+        pp_gen_id: gfm_row for gfm_row, pp_gen_id in enumerate(gens.index)
     }
 
     # -------------------------------------------------------------------------
@@ -105,4 +114,14 @@ def build_p2g_maps(
             map_branch_p2g[pp_branch_id] = offset + row
         offset += len(df)
 
-    return MappingP2G(bus=map_bus_p2g, branch=map_branch_p2g, gen=map_gen_p2g)
+    bus_number = {
+        pp_bus_id: int(network.reverse_bus_index_mapping[gfm_row])
+        for pp_bus_id, gfm_row in map_bus_p2g.items()
+    }
+
+    return MappingP2G(
+        bus=map_bus_p2g,
+        branch=map_branch_p2g,
+        gen=map_gen_p2g,
+        bus_number=bus_number,
+    )

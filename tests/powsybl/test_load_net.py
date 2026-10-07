@@ -23,6 +23,7 @@ from gridfm_datakit.network import get_pglib_source_path
 import gridfm_datakit.powsybl as powsybl
 from gridfm_datakit.network import Network
 from gridfm_datakit.utils.idx_cost import MODEL, POLYNOMIAL
+from gridfm_datakit.utils.idx_gen import PG
 
 pytestmark = pytest.mark.skipif(
     not powsybl.is_powsybl_available(),
@@ -127,6 +128,44 @@ class TestLoadNetXiidm:
         """A non-existent path must raise FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             powsybl.load_net("/nonexistent/path/to/network.xiidm")
+
+
+@pytest.fixture(scope="module")
+def loaded_open_gen(tmp_path_factory):
+    """IEEE-14 with generator B3-G disconnected, loaded from XIIDM."""
+    pp_net = powsybl.pypowsybl.network.create_ieee14()
+    pp_net.update_generators(id="B3-G", connected=False)
+    path = tmp_path_factory.mktemp("xiidm") / "ieee14_open_gen.xiidm"
+    pp_net.save(str(path))
+    return powsybl.load_net(str(path))
+
+
+class TestLoadNetDisconnectedGenerator:
+    """The MATPOWER export leaves disconnected generators out."""
+
+    def test_gen_map_skips_disconnected(self, loaded_open_gen):
+        gens = loaded_open_gen.pp_net.get_generators()
+        assert set(loaded_open_gen.mapping_p2g.gen) == set(
+            gens.index[gens["connected"]],
+        )
+        assert loaded_open_gen.gfm_net.gens.shape[0] == len(
+            loaded_open_gen.mapping_p2g.gen,
+        )
+
+    def test_gen_map_rows_match_dispatch(self, loaded_open_gen):
+        gens = loaded_open_gen.pp_net.get_generators()
+        for gen_id, row in loaded_open_gen.mapping_p2g.gen.items():
+            assert loaded_open_gen.gfm_net.gens[row, PG] == pytest.approx(
+                gens.loc[gen_id, "target_p"],
+            )
+
+    def test_update_powsybl_leaves_disconnected_alone(self, loaded_open_gen):
+        powsybl.update_powsybl(
+            loaded_open_gen.pp_net,
+            loaded_open_gen.gfm_net,
+            loaded_open_gen.mapping_p2g,
+        )
+        assert not loaded_open_gen.pp_net.get_generators().loc["B3-G", "connected"]
 
 
 # ---------------------------------------------------------------------------

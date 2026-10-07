@@ -5,7 +5,7 @@ import time
 import pytest
 
 import gridfm_datakit.powsybl as powsybl
-from gridfm_datakit.network import load_net_from_pglib
+from gridfm_datakit.network import get_pglib_source_path, load_net_from_pglib
 from gridfm_datakit.powsybl.preprocess import _is_power_flow_computed
 
 pytestmark = pytest.mark.skipif(
@@ -72,14 +72,9 @@ class TestPreprocessPPPFRes:
         pp_net.per_unit = True
         bus_res = res["solution"]["bus"]
         pp_bus_res = pp_net.get_buses()
-        for idx_pp, idx_gfm in mapping_p2g.bus.items():
-            assert (
-                bus_res[str(int(idx_gfm + 1))]["vm"] == pp_bus_res.loc[idx_pp]["v_mag"]
-            )
-            assert (
-                bus_res[str(int(idx_gfm + 1))]["va"]
-                == pp_bus_res.loc[idx_pp]["v_angle"]
-            )
+        for idx_pp, number in mapping_p2g.bus_number.items():
+            assert bus_res[str(number)]["vm"] == pp_bus_res.loc[idx_pp]["v_mag"]
+            assert bus_res[str(number)]["va"] == pp_bus_res.loc[idx_pp]["v_angle"]
 
     def test_branch_converage(self, ieee14_acpf_res):
         """All branches's results are converted through preprocessing."""
@@ -163,6 +158,22 @@ class TestPreprocessPPPFRes:
         assert res["solution"]["pf"] == _is_power_flow_computed(
             pf_metadata[0].status_text,
         )
+
+
+class TestBusNumbers:
+    """Bus results are keyed by the original bus numbers."""
+
+    def test_keys_are_original_numbers_when_not_contiguous(self):
+        """case300 numbers its buses up to 9533, so index + 1 is not the key."""
+        loaded = powsybl.load_net(get_pglib_source_path("case300_ieee"))
+        pf_metadata = powsybl.pypowsybl.loadflow.run_dc(
+            loaded.pp_net,
+            powsybl.get_default_lf_params(),
+        )
+        res = powsybl.get_pf_res(loaded.pp_net, 0.0, pf_metadata, loaded.mapping_p2g)
+        numbers = loaded.gfm_net.reverse_bus_index_mapping.values()
+        assert set(res["solution"]["bus"]) == {str(n) for n in numbers}
+        assert max(numbers) > len(numbers)
 
 
 # ---------------------------------------------------------------------------
