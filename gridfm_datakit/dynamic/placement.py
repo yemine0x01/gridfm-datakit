@@ -2,13 +2,13 @@
 
 Graph: the working variant of the network. Nodes are the buses of the
 bus-breaker view, edges the lines and two-winding transformers connected at both
-ends and each pair of connected ends of a three-winding transformer, so a graph
-built after the topology perturbation sees what was cut. A three-winding
-transformer is an edge only, never a target.
+ends, each pair of connected ends of a three-winding transformer, and the closed
+switches of the view, so a graph built after the topology perturbation sees what
+was cut. A three-winding transformer is an edge only, never a target.
 
-Distance: breadth-first hop count from the anchor. A generator or load sits at
-its bus's distance, a branch at its nearer end's. Unreachable elements are never
-candidates.
+Distance: hop count from the anchor. A closed switch adds no hop, so the buses it
+joins share a distance. A generator or load sits at its bus's distance, a branch
+at its nearer end's. Unreachable elements are never candidates.
 
 Targets are drawn in list order, each among the candidates that leave the later
 targets a distinct element each (bipartite matching), so a placement fails only
@@ -21,8 +21,9 @@ the variant instead of spinning.
 
 from __future__ import annotations
 
+import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -43,10 +44,12 @@ class EventGraph:
     Args:
         adjacency: The neighbours of every bus.
         candidates: Per element type, the element IDs sorted, each with its buses.
+        couplings: The buses each bus is joined to by a closed switch.
     """
 
     adjacency: Mapping[str, Tuple[str, ...]]
     candidates: Mapping[str, Tuple[Tuple[str, Tuple[str, ...]], ...]]
+    couplings: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def from_network(cls, pp_net: Any) -> EventGraph:
@@ -107,6 +110,21 @@ class EventGraph:
             for bus1, bus2 in combinations(ends, 2):
                 neighbours[bus1].add(bus2)
                 neighbours[bus2].add(bus1)
+        couplings: Dict[str, set] = {bus: set() for bus in buses}
+        switches = pp_net.get_switches(
+            attributes=["bus_breaker_bus1_id", "bus_breaker_bus2_id", "open"],
+        )
+        closed = switches[
+            ~switches["open"]
+            & (switches["bus_breaker_bus1_id"] != "")
+            & (switches["bus_breaker_bus2_id"] != "")
+        ]
+        for bus1, bus2 in zip(
+            closed["bus_breaker_bus1_id"],
+            closed["bus_breaker_bus2_id"],
+        ):
+            couplings[bus1].add(bus2)
+            couplings[bus2].add(bus1)
         for element, frame in injections.items():
             connected = frame[frame["connected"]]
             candidates[element] = [
@@ -119,6 +137,7 @@ class EventGraph:
             candidates={
                 element: tuple(sorted(candidates[element])) for element in ELEMENT_TYPES
             },
+            couplings={bus: tuple(sorted(c)) for bus, c in couplings.items() if c},
         )
 
     def distances(self, anchor: str) -> Dict[str, int]:
@@ -139,8 +158,12 @@ class EventGraph:
         queue = deque([anchor])
         while queue:
             bus = queue.popleft()
+            for neighbour in self.couplings.get(bus, ()):
+                if distance.get(neighbour, math.inf) > distance[bus]:
+                    distance[neighbour] = distance[bus]
+                    queue.appendleft(neighbour)
             for neighbour in self.adjacency[bus]:
-                if neighbour not in distance:
+                if distance.get(neighbour, math.inf) > distance[bus] + 1:
                     distance[neighbour] = distance[bus] + 1
                     queue.append(neighbour)
         return distance

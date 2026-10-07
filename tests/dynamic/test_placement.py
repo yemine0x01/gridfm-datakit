@@ -237,3 +237,36 @@ def test_an_unplaceable_random_scenario_gives_up(graph):
 def test_invalid_requests_raise_value_error(graph, anchor, targets):
     with pytest.raises(ValueError):
         _draw(graph, anchor, targets, 0)
+
+
+HOPS_FROM_S2 = {"S2VL1": 0, "S3VL1": 1, "S4VL1": 2}
+
+
+@pytest.fixture
+def node_breaker():
+    import pypowsybl.network as pn
+
+    return pn.create_four_substations_node_breaker_network()
+
+
+def test_closed_switches_add_no_hop(node_breaker):
+    buses = node_breaker.get_bus_breaker_view_buses(attributes=["voltage_level_id"])
+    expected = {
+        bus: HOPS_FROM_S2[level]
+        for bus, level in buses["voltage_level_id"].items()
+        if level in HOPS_FROM_S2
+    }
+    graph = EventGraph.from_network(node_breaker)
+    assert graph.distances("S2VL1_0") == expected
+    assert _draw(graph, "S2VL1_0", [("load", 2, 2)], 0)[1] == ["LD6"]
+
+
+def test_an_open_switch_is_not_an_edge(node_breaker):
+    node_breaker.clone_variant(node_breaker.get_working_variant_id(), "perturbed")
+    node_breaker.set_working_variant("perturbed")
+    node_breaker.update_switches(id="S4VL1_LD6_BREAKER", open=True)
+
+    graph = EventGraph.from_network(node_breaker)
+    assert "S4VL1_2" not in graph.distances("S2VL1_0")
+    with pytest.raises(PlacementError):
+        _draw(graph, "S2VL1_0", [("load", 2, 2)], 0)
