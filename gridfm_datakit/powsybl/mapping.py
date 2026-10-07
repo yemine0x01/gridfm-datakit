@@ -18,11 +18,14 @@ class MappingP2G:
         ``{pp_branch_id: gfm_branch_row}``
     gen : Dict[str, int]
         ``{pp_gen_id: gfm_gen_row}``
+    bus_number : Dict[str, int]
+        ``{pp_bus_id: original_bus_number}``, the number a solution is keyed by
     """
 
     bus: Dict[str, float]
     branch: Dict[str, int]
     gen: Dict[str, int]
+    bus_number: Dict[str, int]
 
 
 # ---------------------------------------------------------------------------
@@ -105,4 +108,14 @@ def build_p2g_maps(
             map_branch_p2g[pp_branch_id] = offset + row
         offset += len(df)
 
-    return MappingP2G(bus=map_bus_p2g, branch=map_branch_p2g, gen=map_gen_p2g)
+    bus_number = {
+        pp_bus_id: int(network.reverse_bus_index_mapping[gfm_row])
+        for pp_bus_id, gfm_row in map_bus_p2g.items()
+    }
+
+    return MappingP2G(
+        bus=map_bus_p2g,
+        branch=map_branch_p2g,
+        gen=map_gen_p2g,
+        bus_number=bus_number,
+    )
