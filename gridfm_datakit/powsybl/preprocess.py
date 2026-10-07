@@ -83,7 +83,9 @@ def _format_gens_res(
     # sign convention in PowSyBl: negative = injection
     return {
         str(int(map_gen_p2g[row.Index] + 1)): {"pg": -row.p, "qg": -row.q}
-        for row in df[df["connected"]][["p", "q"]].itertuples()
+        for row in df[df["connected"] & df.index.isin(list(map_gen_p2g))][
+            ["p", "q"]
+        ].itertuples()
     }
 
 

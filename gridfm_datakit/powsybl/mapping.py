@@ -36,6 +36,7 @@ class MappingP2G:
 def build_p2g_maps(
     network: Network,
     pp_net,
+    connected_gens_only: bool = False,
 ) -> MappingP2G:
     """Build pypowsybl-to-gridfm ID maps in O(n) by parsing pypowsybl element IDs.
 
@@ -56,6 +57,9 @@ def build_p2g_maps(
         The gridfm_datakit Network passed to ``to_powsybl()`` to produce *pp_net*.
     pp_net:
         The pypowsybl network produced by ``to_powsybl(network)``.
+    connected_gens_only:
+        Map only the connected generators. Set when *network* comes from
+        pypowsybl's MATPOWER export, which leaves disconnected generators out.
 
     Returns
     -------
@@ -93,9 +97,11 @@ def build_p2g_maps(
     # -------------------------------------------------------------------------
     # 1. Gen map — direct enumeration (row order is preserved by pypowsybl)
     # -------------------------------------------------------------------------
+    gens = pp_net.get_generators()
+    if connected_gens_only:
+        gens = gens[gens["connected"]]
     map_gen_p2g: Dict[str, int] = {
-        pp_gen_id: gfm_row
-        for gfm_row, pp_gen_id in enumerate(pp_net.get_generators().index)
+        pp_gen_id: gfm_row for gfm_row, pp_gen_id in enumerate(gens.index)
     }
 
     # -------------------------------------------------------------------------

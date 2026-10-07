@@ -202,7 +202,7 @@ def update_powsybl(
     )
 
     pp_net.per_unit = False
-    gen_id = pp_net.get_generators().index.to_numpy()
+    gen_id = np.array(list(mapping_p2g.gen), dtype=object)
     gfm_gen_idx = np.array([mapping_p2g.gen[i] for i in gen_id])
     pp_net.update_generators(
         id=gen_id,

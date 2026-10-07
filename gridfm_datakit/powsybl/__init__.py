@@ -308,7 +308,7 @@ def load_net(network_path: str) -> LoadedNetwork:
         pp_net = pypowsybl.network.load(str(path))
 
     gfm_net = from_powsybl(pp_net)
-    mapping_p2g = build_p2g_maps(gfm_net, pp_net)
+    mapping_p2g = build_p2g_maps(gfm_net, pp_net, connected_gens_only=True)
 
     return LoadedNetwork(
         pp_net=pp_net,
