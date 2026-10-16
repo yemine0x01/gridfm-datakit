@@ -72,7 +72,8 @@ class TestPreprocessPPPFRes:
         pp_net.per_unit = True
         bus_res = res["solution"]["bus"]
         pp_bus_res = pp_net.get_buses()
-        for idx_pp, number in mapping_p2g.bus_number.items():
+        for idx_pp, idx_gfm in mapping_p2g.bus.items():
+            number = mapping_p2g.reverse_bus_index_mapping[int(idx_gfm)]
             assert bus_res[str(number)]["vm"] == pp_bus_res.loc[idx_pp]["v_mag"]
             assert bus_res[str(number)]["va"] == pp_bus_res.loc[idx_pp]["v_angle"]
 
