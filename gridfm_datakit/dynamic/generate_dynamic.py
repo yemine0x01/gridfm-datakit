@@ -262,7 +262,7 @@ def _load_config(
     if isinstance(config, NestedNamespace):
         return config
     if isinstance(config, (str, os.PathLike)):
-        with open(config, "r") as f:
+        with open(config, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         if not isinstance(config, dict):
             raise ValueError(
@@ -839,7 +839,10 @@ class _DynamicDataWriter:
                 f"_perturbation_{result.get('perturbation_index', 0)}"
                 f"_event_{result.get('event_index', 0)}.json"
             )
-            (reports_dir / name).write_text(str(dynamic_results.report))
+            (reports_dir / name).write_text(
+                str(dynamic_results.report),
+                encoding="utf-8",
+            )
             self.report_index.append(name)
 
     # -- metadata ----------------------------------------------------------
@@ -893,7 +896,7 @@ class _DynamicDataWriter:
             self._write_coordinates()
 
         path = str(self.output_dir / "metadata.json")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         self.file_paths["metadata"] = path
 
