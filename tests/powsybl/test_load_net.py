@@ -141,16 +141,11 @@ def loaded_open_gen(tmp_path_factory):
 
 
 class TestLoadNetDisconnectedGenerator:
-    """The MATPOWER export leaves disconnected generators out."""
+    """The gen map follows the export, with or without the disconnected generator."""
 
-    def test_gen_map_skips_disconnected(self, loaded_open_gen):
-        gens = loaded_open_gen.pp_net.get_generators()
-        assert set(loaded_open_gen.mapping_p2g.gen) == set(
-            gens.index[gens["connected"]],
-        )
-        assert loaded_open_gen.gfm_net.gens.shape[0] == len(
-            loaded_open_gen.mapping_p2g.gen,
-        )
+    def test_gen_map_covers_every_row(self, loaded_open_gen):
+        rows = loaded_open_gen.gfm_net.gens.shape[0]
+        assert sorted(loaded_open_gen.mapping_p2g.gen.values()) == list(range(rows))
 
     def test_gen_map_rows_match_dispatch(self, loaded_open_gen):
         gens = loaded_open_gen.pp_net.get_generators()

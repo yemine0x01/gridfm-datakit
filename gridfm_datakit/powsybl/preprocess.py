@@ -87,9 +87,7 @@ def _format_gens_res(
     # sign convention in PowSyBl: negative = injection
     return {
         str(int(map_gen_p2g[row.Index] + 1)): {"pg": -row.p, "qg": -row.q}
-        for row in df[df["connected"] & df.index.isin(list(map_gen_p2g))][
-            ["p", "q"]
-        ].itertuples()
+        for row in df[df["connected"]][["p", "q"]].itertuples()
     }
 
 
@@ -115,6 +113,7 @@ def _format_branch_res(
             "qt": row.q2,
         }
         for row in df[["p1", "q1", "p2", "q2"]].itertuples()
+        if row.Index in map_branch_p2g
     }
 
 
@@ -133,8 +132,7 @@ def _format_buses_res(
             ``_solution_arrays`` looks up.
 
     Returns:
-        Dict containing voltage magnitude and angle for each bus, keyed by the
-        original bus number like a PowerModels solution.
+        Dict containing voltage magnitude and angle for each bus.
     """
     df = pp_net.get_buses()
 

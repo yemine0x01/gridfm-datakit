@@ -38,14 +38,16 @@ class MappingP2G:
 def build_p2g_maps(
     network: Network,
     pp_net,
-    connected_gens_only: bool = False,
 ) -> MappingP2G:
     """Build pypowsybl-to-gridfm index maps for a network read by ``from_powsybl``.
 
     :func:`~gridfm_datakit.powsybl.convert.from_powsybl` writes buses,
     generators and branches (lines, then 2-winding transformers) in the order
-    pypowsybl lists them, so each map pairs the i-th pypowsybl element with
-    gridfm row i.  A network built by
+    pypowsybl lists them, so each map pairs the i-th exported pypowsybl
+    element with gridfm row i.  pypowsybl 1.16 exports disconnected
+    generators and branches out of service, older releases leave them out
+    and they get no entry: the maps follow whichever the export did, told
+    apart by the row count.  A network built by
     :func:`~gridfm_datakit.powsybl.convert.to_powsybl` follows the gridfm
     tables instead, so use the maps ``to_powsybl`` returns.
 
@@ -59,9 +61,6 @@ def build_p2g_maps(
         The gridfm_datakit Network returned by ``from_powsybl(pp_net)``.
     pp_net:
         The pypowsybl network passed to ``from_powsybl``.
-    connected_gens_only:
-        Map only the connected generators. Set when *network* comes from
-        pypowsybl's MATPOWER export, which leaves disconnected generators out.
 
     Returns
     -------
@@ -93,9 +92,10 @@ def build_p2g_maps(
     # -------------------------------------------------------------------------
     # 1. Gen map — direct enumeration (row order is preserved by pypowsybl)
     # -------------------------------------------------------------------------
+    pp_buses = set(map_bus_p2g)
     gens = pp_net.get_generators()
-    if connected_gens_only:
-        gens = gens[gens["connected"]]
+    if len(gens) != network.gens.shape[0]:
+        gens = gens[gens["bus_id"].isin(pp_buses)]
     map_gen_p2g: Dict[str, int] = {
         pp_gen_id: gfm_row for gfm_row, pp_gen_id in enumerate(gens.index)
     }
@@ -103,12 +103,19 @@ def build_p2g_maps(
     # -------------------------------------------------------------------------
     # 2. Branch map — direct enumeration (lines, transformers, ...)
     # -------------------------------------------------------------------------
+    branch_frames = (pp_net.get_lines(), pp_net.get_2_windings_transformers())
+    export_all = sum(map(len, branch_frames)) == network.branches.shape[0]
     offset = 0
     map_branch_p2g: Dict[str, int] = {}
-    for df in (pp_net.get_lines(), pp_net.get_2_windings_transformers()):
-        for row, pp_branch_id in enumerate(df.index):
+    for df in branch_frames:
+        exported = df.index
+        if not export_all:
+            exported = exported[
+                df["bus1_id"].isin(pp_buses) & df["bus2_id"].isin(pp_buses)
+            ]
+        for row, pp_branch_id in enumerate(exported):
             map_branch_p2g[pp_branch_id] = offset + row
-        offset += len(df)
+        offset += len(exported)
 
     return MappingP2G(
         bus=map_bus_p2g,
